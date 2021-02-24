@@ -1,0 +1,11 @@
+{
+	"name": "worker-control",
+	"description": "",
+	"version": "1.0.0",
+	"homepage": "https://github.com/MurilloLazzaretti/worker-control",
+	"mainsrc": "./",
+	"projects": [],
+	"dependencies": {
+		"https://github.com/murillolazzaretti/zapmq-delphi-wrapper": "^v1.0.0"
+	}
+}
