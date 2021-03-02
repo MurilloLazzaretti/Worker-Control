@@ -31,8 +31,11 @@ begin
   Result := TKeepAliveMessage.Create;
   Response := TJSONObject.ParseJSONValue(
     TEncoding.ASCII.GetBytes(pJSON.GetValue<TJSONObject>('Response').ToString), 0) as TJSONObject;
-  Result.ProcessId := Response.GetValue<string>('ProcessId');
-  Response.Free;
+  try
+    Result.ProcessId := Response.GetValue<string>('ProcessId');
+  finally
+    Response.Free;
+  end;
 end;
 
 procedure TKeepAliveMessage.SetProcessId(const Value: string);

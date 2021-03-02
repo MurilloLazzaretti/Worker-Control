@@ -3,16 +3,14 @@ unit WorkerControl.Manager;
 interface
 
 uses
-  System.Classes, Generics.Collections, WorkerControl.WorkerGroup;
+  System.Classes, Generics.Collections, WorkerControl.WorkerGroup, SyncObjs;
 
 type
   TManager = class(TThread)
   private
-    FLastExecute : Cardinal;
+    FEvent : TEvent;
     FWorkerGroups: TObjectList<TWorkerGroup>;
-    FStoped : boolean;
     procedure SetWorkerGroups(const Value: TObjectList<TWorkerGroup>);
-    function LoadTextConfig : string;
     procedure LoadConfig;
     function GetWorkerGroup(const pName : string) : TWorkerGroup;
   protected
@@ -35,26 +33,22 @@ constructor TManager.Create;
 begin
   inherited Create(True);
   WorkerGroups := TObjectList<TWorkerGroup>.Create(True);
+  FEvent := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TManager.Destroy;
 begin
-  WorkerGroups.Free;
+  FEvent.Free;
   inherited;
 end;
 
 procedure TManager.Execute;
 begin
   inherited;
-  FStoped := False;
   while not Terminated do
   begin
-    if (FLastExecute + 60000) < GetTickCount then
-    begin
-      FLastExecute := GetTickCount;
-      LoadConfig;
-    end;
-    Sleep(100);
+    LoadConfig;
+    FEvent.WaitFor(120000);
   end;
 end;
 
@@ -75,50 +69,31 @@ end;
 
 procedure TManager.LoadConfig;
 var
-  ConfigText : string;
-  ConfigJSON : TJSONObject;
   Config : TConfig;
-  WorkerGroupConfig, Wgc : TWorkerGroupConfig;
+  WorkerGroupConfig : TWorkerGroupConfig;
   WorkerGroup : TWorkerGroup;
 begin
-//  ConfigText := LoadTextConfig;
-//  ConfigJSON := TJSONObject.ParseJSONValue(
-//    TEncoding.ASCII.GetBytes(ConfigText), 0) as TJSONObject;
-//  Config := TConfig.FromJSON(ConfigJSON);
-  Config := TConfig.Create;
-  wgc := TWorkerGroupConfig.Create;
-  wgc.Name := 'Teste';
-  wgc.ApplicationFullPath := 'C:\Temp\bossteste\Win32\Debug\WorkerWrapper.exe';
-  wgc.TotalWorkers := 250;
-  Config.WorkerGroupsConfig.Add(wgc);
-  for WorkerGroupConfig in Config.WorkerGroupsConfig do
-  begin
-    WorkerGroup := GetWorkerGroup(WorkerGroupConfig.Name);
-    if Assigned(WorkerGroup) then
-    begin
-      WorkerGroup.TotalWorkers := WorkerGroupConfig.TotalWorkers;
-    end
-    else
-    begin
-      WorkerGroup := TWorkerGroup.Create('localhost', 5679);
-      WorkerGroup.Name := WorkerGroupConfig.Name;
-      WorkerGroup.ApplicationFullPath := WorkerGroupConfig.ApplicationFullPath;
-      WorkerGroup.TotalWorkers := WorkerGroupConfig.TotalWorkers;
-      WorkerGroups.Add(WorkerGroup);
-      WorkerGroup.StartWorkers;
-    end;
-  end;
-  Config.Free;
-end;
-
-function TManager.LoadTextConfig: string;
-var
-  Config : TStringList;
-begin
-  Config := TStringList.Create;
+  Config := TConfig.FromFile('ConfigWorkers.json');
   try
-    Config.LoadFromFile(ExtractFilePath(Application.ExeName) + 'Config.js');
-    Result := Config.Text;
+    for WorkerGroupConfig in Config.WorkerGroupsConfig do
+    begin
+      WorkerGroup := GetWorkerGroup(WorkerGroupConfig.Name);
+      if Assigned(WorkerGroup) then
+      begin
+        WorkerGroup.TotalWorkers := WorkerGroupConfig.TotalWorkers;
+      end
+      else
+      begin
+        WorkerGroup := TWorkerGroup.Create(Config.ZapMQHost, Config.ZapMQPort);
+        WorkerGroup.Name := WorkerGroupConfig.Name;
+        WorkerGroup.ApplicationFullPath := WorkerGroupConfig.ApplicationFullPath;
+        WorkerGroup.TotalWorkers := WorkerGroupConfig.TotalWorkers;
+        WorkerGroup.MonitoringRate := WorkerGroupConfig.MonitoringRate;
+        WorkerGroup.TimeoutKeepAlive := WorkerGroupConfig.TimeoutKeepAlive;
+        WorkerGroups.Add(WorkerGroup);
+        WorkerGroup.StartWorkers;
+      end;
+    end;
   finally
     Config.Free;
   end;
@@ -132,14 +107,18 @@ end;
 procedure TManager.Stop;
 var
   WorkerGroup : TWorkerGroup;
+  I : integer;
 begin
   Terminate;
+  FEvent.SetEvent;
   while not Terminated do;
-  for WorkerGroup in WorkerGroups do
+  for I := Pred(WorkerGroups.Count) downto 0 do
   begin
+    WorkerGroup := WorkerGroups[i];
     WorkerGroup.StopWorkers;
     WorkerGroups.Remove(WorkerGroup);
   end;
+  WorkerGroups.Free;
 end;
 
 end.

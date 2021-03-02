@@ -4,17 +4,19 @@ interface
 
 uses
   System.Classes, Generics.Collections, WorkerControl.Worker, Windows,
-  ZapMQ.Wrapper, ZapMQ.Message.JSON, JSON;
+  ZapMQ.Wrapper, ZapMQ.Message.JSON, JSON, SyncObjs;
 
 type
   TWorkerGroup = class(TThread)
   private
-    FLastExecute : Cardinal;
+    FEvent : TEvent;
     FTotalWorkers: integer;
     FApplicationFullPath: string;
     FWorkers: TObjectList<TWorker>;
     FZapMQWrapper : TZapMQWrapper;
     FName: string;
+    FTimeoutKeepAlive: Cardinal;
+    FMonitoringRate: Cardinal;
     procedure SetApplicationFullPath(const Value: string);
     procedure SetTotalWorkers(const Value: integer);
     procedure SetWorkers(const Value: TObjectList<TWorker>);
@@ -28,6 +30,8 @@ type
     procedure SendKeepAliveWorkers;
     procedure KeepAliveHandlerRPC(pMessage: TJSONObject);
     procedure SetName(const Value: string);
+    procedure SetMonitoringRate(const Value: Cardinal);
+    procedure SetTimeoutKeepAlive(const Value: Cardinal);
   protected
     procedure Execute; override;
   public
@@ -35,6 +39,8 @@ type
     property Workers : TObjectList<TWorker> read FWorkers write SetWorkers;
     property ApplicationFullPath : string read FApplicationFullPath write SetApplicationFullPath;
     property TotalWorkers : integer read FTotalWorkers write SetTotalWorkers;
+    property MonitoringRate : Cardinal read FMonitoringRate write SetMonitoringRate;
+    property TimeoutKeepAlive : Cardinal read FTimeoutKeepAlive write SetTimeoutKeepAlive;
     procedure StartWorkers;
     procedure StopWorkers;
     constructor Create(const pZapMQHost : string; const pZapMQPort : integer); overload;
@@ -76,12 +82,14 @@ begin
   Workers := TObjectList<TWorker>.Create(True);
   FZapMQWrapper := TZapMQWrapper.Create(pZapMQHost, pZapMQPort);
   FZapMQWrapper.OnRPCExpired := WorkerNotResponding;
+  FEvent := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TWorkerGroup.Destroy;
 begin
   FZapMQWrapper.Free;
   Workers.Free;
+  FEvent.Free;
   inherited;
 end;
 
@@ -90,13 +98,9 @@ begin
   inherited;
   while not Terminated do
   begin
-    if (FLastExecute + 30000) < GetTickCount then
-    begin
-      FLastExecute := GetTickCount;
-      EqualizeTotalWorkers;
-      SendKeepAliveWorkers;
-    end;
-    Sleep(100);
+    EqualizeTotalWorkers;
+    SendKeepAliveWorkers;
+    FEvent.WaitFor(FMonitoringRate);
   end;
 end;
 
@@ -152,11 +156,11 @@ begin
   for Worker in Workers do
   begin
     KeepAliveMessage := TKeepAliveMessage.Create;
+    KeepAliveMessage.ProcessId := Worker.ProcessId.ToString;
+    JSONMessage := KeepAliveMessage.ToJSON;
     try
-      KeepAliveMessage.ProcessId := Worker.ProcessId.ToString;
-      JSONMessage := KeepAliveMessage.ToJSON;
       FZapMQWrapper.SendRPCMessage(Worker.ProcessId.ToString, JSONMessage,
-        KeepAliveHandlerRPC, 15000);
+        KeepAliveHandlerRPC, FTimeoutKeepAlive);
     finally
       JSONMessage.Free;
       KeepAliveMessage.Free;
@@ -169,9 +173,19 @@ begin
   FApplicationFullPath := Value;
 end;
 
+procedure TWorkerGroup.SetMonitoringRate(const Value: Cardinal);
+begin
+  FMonitoringRate := Value;
+end;
+
 procedure TWorkerGroup.SetName(const Value: string);
 begin
   FName := Value;
+end;
+
+procedure TWorkerGroup.SetTimeoutKeepAlive(const Value: Cardinal);
+begin
+  FTimeoutKeepAlive := Value;
 end;
 
 procedure TWorkerGroup.SetTotalWorkers(const Value: integer);
@@ -190,14 +204,14 @@ var
   Worker : TWorker;
 begin
   if CreateProcess(PChar(ApplicationFullPath), nil, nil, nil, False,
-    CREATE_NEW_CONSOLE or NORMAL_PRIORITY_CLASS, nil, nil,
-    GetStartUpInfo, ProcessInfo) then
+    NORMAL_PRIORITY_CLASS, nil, nil, GetStartUpInfo, ProcessInfo) then
   begin
     Worker := TWorker.Create;
     Worker.ProcessId := ProcessInfo.dwProcessId;
     Worker.LastKeepAlive := IncMinute(now, 5);
     Workers.Add(Worker);
   end;
+  CloseHandle(ProcessInfo.hProcess);
 end;
 
 procedure TWorkerGroup.StartWorkers;
@@ -218,6 +232,7 @@ var
   Worker : TWorker;
 begin
   Terminate;
+  FEvent.SetEvent;
   while not Terminated do;
   for Worker in Workers do
   begin
@@ -249,10 +264,6 @@ begin
   Worker := Workers.First;
   HandleTerminate := OpenProcess(PROCESS_TERMINATE, False, Worker.ProcessId);
   Result := TerminateProcess(HandleTerminate, 0);
-  if Result then
-  begin
-    Worker.Free;
-  end;
 end;
 
 end.
