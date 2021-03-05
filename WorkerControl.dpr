@@ -2,14 +2,14 @@ program WorkerControl;
 
 uses
   Vcl.SvcMgr,
-  uMain in 'uMain.pas' {WorkerControlService: TService},
-  WorkerControl.BoostWorkerGroup in 'WorkerControl.BoostWorkerGroup.pas',
-  WorkerControl.Config in 'WorkerControl.Config.pas',
-  WorkerControl.KeepAliveMessage in 'WorkerControl.KeepAliveMessage.pas',
-  WorkerControl.Manager in 'WorkerControl.Manager.pas',
-  WorkerControl.SafeStopMessage in 'WorkerControl.SafeStopMessage.pas',
-  WorkerControl.Worker in 'WorkerControl.Worker.pas',
-  WorkerControl.WorkerGroup in 'WorkerControl.WorkerGroup.pas';
+  uMain in 'src\uMain.pas' {WorkerControlService: TService},
+  WorkerControl.BoostWorkerGroup in 'src\WorkerControl.BoostWorkerGroup.pas',
+  WorkerControl.Config in 'src\WorkerControl.Config.pas',
+  WorkerControl.KeepAliveMessage in 'src\WorkerControl.KeepAliveMessage.pas',
+  WorkerControl.Manager in 'src\WorkerControl.Manager.pas',
+  WorkerControl.SafeStopMessage in 'src\WorkerControl.SafeStopMessage.pas',
+  WorkerControl.Worker in 'src\WorkerControl.Worker.pas',
+  WorkerControl.WorkerGroup in 'src\WorkerControl.WorkerGroup.pas';
 
 {$R *.RES}
 

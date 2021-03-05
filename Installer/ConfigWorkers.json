@@ -3,15 +3,14 @@
     "ZapMQPort" : 5679,
     "WorkerGroups" : [
         {
-            "Enabled" : false,
+            "Enabled" : true,
             "Name" : "Teste",
             "ApplicationFullPath" : "C:\\Temp\\bossteste\\Win32\\Debug\\SimpleSample.exe",
             "TotalWorkers" : 2,
             "MonitoringRate": 30000,
             "TimeoutKeepAlive" : 125000,
-            "Debug" : true,
             "Boost" : {
-                "Enabled" : false,
+                "Enabled" : true,
                 "BoostWorkers" : 3,
                 "StartTime" : "12:00:00",
                 "EndTime" : "12:19:00"    

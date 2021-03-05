@@ -21,6 +21,7 @@ type
     FEnabled: boolean;
     FBoost: TBoostWorkerGroup;
     FConfigReloaded: boolean;
+    FDebug: boolean;
     procedure SetApplicationFullPath(const Value: string);
     procedure SetTotalWorkers(const Value: integer);
     procedure SetWorkers(const Value: TObjectList<TWorker>);
@@ -40,6 +41,7 @@ type
     procedure SetEnabled(const Value: boolean);
     procedure SetBoost(const Value: TBoostWorkerGroup);
     procedure SetConfigReloaded(const Value: boolean);
+    procedure SetDebug(const Value: boolean);
   protected
     procedure Execute; override;
   public
@@ -51,6 +53,7 @@ type
     property TimeoutKeepAlive : Cardinal read FTimeoutKeepAlive write SetTimeoutKeepAlive;
     property Boost : TBoostWorkerGroup read FBoost write SetBoost;
     property Workers : TObjectList<TWorker> read FWorkers write SetWorkers;
+    property Debug : boolean read FDebug write SetDebug;
     property ConfigReloaded : boolean read FConfigReloaded write SetConfigReloaded;
     procedure StartWorkers;
     procedure StopWorkers;
@@ -149,8 +152,10 @@ begin
   Result.lpDesktop := nil;
   Result.lpTitle := nil;
   Result.dwFlags := STARTF_USESHOWWINDOW;
-  //Result.wShowWindow := SW_HIDE;
-  Result.wShowWindow := SW_SHOWNORMAL;
+  if Debug then
+    Result.wShowWindow := SW_SHOWNORMAL
+  else
+    Result.wShowWindow := SW_HIDE;
   Result.cbReserved2 := 0;
   Result.lpReserved2 := nil;
 end;
@@ -257,6 +262,11 @@ end;
 procedure TWorkerGroup.SetConfigReloaded(const Value: boolean);
 begin
   FConfigReloaded := Value;
+end;
+
+procedure TWorkerGroup.SetDebug(const Value: boolean);
+begin
+  FDebug := Value;
 end;
 
 procedure TWorkerGroup.SetEnabled(const Value: boolean);

@@ -86,6 +86,7 @@ begin
         WorkerGroup.ApplicationFullPath := WorkerGroupConfig.ApplicationFullPath;
         WorkerGroup.MonitoringRate := WorkerGroupConfig.MonitoringRate;
         WorkerGroup.TimeoutKeepAlive := WorkerGroupConfig.TimeoutKeepAlive;
+        WorkerGroup.Debug := WorkerGroupConfig.Debug;
         WorkerGroup.Boost.Enabled := WorkerGroupConfig.Boost.Enabled;
         WorkerGroup.Boost.BoostWorkers := WorkerGroupConfig.Boost.BoostWorkers;
         WorkerGroup.Boost.StartTime := WorkerGroupConfig.Boost.StartTime;

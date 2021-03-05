@@ -32,6 +32,7 @@ type
     FMonitoringRate: Cardinal;
     FEnabled: boolean;
     FBoost: TBoostWorkerGroupConfig;
+    FDebug: boolean;
     procedure SetApplicationFullPath(const Value: string);
     procedure SetName(const Value: string);
     procedure SetTotalWorkers(const Value: integer);
@@ -39,6 +40,7 @@ type
     procedure SetTimeoutKeepAlive(const Value: Cardinal);
     procedure SetEnabled(const Value: boolean);
     procedure SetBoost(const Value: TBoostWorkerGroupConfig);
+    procedure SetDebug(const Value: boolean);
   public
     property Enabled : boolean read FEnabled write SetEnabled;
     property Name : string read FName write SetName;
@@ -47,6 +49,7 @@ type
     property MonitoringRate : Cardinal read FMonitoringRate write SetMonitoringRate;
     property TimeoutKeepAlive : Cardinal read FTimeoutKeepAlive write SetTimeoutKeepAlive;
     property Boost : TBoostWorkerGroupConfig read FBoost write SetBoost;
+    property Debug : boolean read FDebug write SetDebug;
     constructor Create; overload;
     destructor Destroy; override;
   end;
@@ -111,6 +114,7 @@ begin
       WorkerGroupConfig.TotalWorkers := JSONArray.Items[i].GetValue<integer>('TotalWorkers');
       WorkerGroupConfig.MonitoringRate := JSONArray.Items[i].GetValue<Cardinal>('MonitoringRate');
       WorkerGroupConfig.TimeoutKeepAlive := JSONArray.Items[i].GetValue<Cardinal>('TimeoutKeepAlive');
+      WorkerGroupConfig.Debug := JSONArray.Items[i].GetValue<boolean>('Debug');
 
       JSONBoostObject := JSONArray.Items[i].GetValue<TJSONObject>('Boost');
       WorkerGroupConfig.Boost.Enabled := JSONBoostObject.GetValue<boolean>('Enabled');
@@ -161,6 +165,11 @@ end;
 procedure TWorkerGroupConfig.SetBoost(const Value: TBoostWorkerGroupConfig);
 begin
   FBoost := Value;
+end;
+
+procedure TWorkerGroupConfig.SetDebug(const Value: boolean);
+begin
+  FDebug := Value;
 end;
 
 procedure TWorkerGroupConfig.SetEnabled(const Value: boolean);
