@@ -8,7 +8,7 @@ Worker Control is in a <b>Beta</b> version for now, if you have any issue, pleas
 ## ⚙️ Installation
 
 Download and run WorkerControl - Installer.exe, specify the folder to install and next, next, next...
-When installation is done, in your services list will be ZapMQ service installed and already running (if there was no problem, of course)
+When installation is done, in your services list will be Worker Control service installed and already running (if there was no problem, of course)
 
 ## 💉 Dependency
 
