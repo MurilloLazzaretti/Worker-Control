@@ -48,7 +48,7 @@ begin
   while not Terminated do
   begin
     LoadConfig;
-    FEvent.WaitFor(120000);
+    FEvent.WaitFor(30000);
   end;
 end;
 
@@ -80,16 +80,31 @@ begin
       WorkerGroup := GetWorkerGroup(WorkerGroupConfig.Name);
       if Assigned(WorkerGroup) then
       begin
+        WorkerGroup.ConfigReloaded := True;
+        WorkerGroup.Enabled := WorkerGroupConfig.Enabled;
         WorkerGroup.TotalWorkers := WorkerGroupConfig.TotalWorkers;
+        WorkerGroup.ApplicationFullPath := WorkerGroupConfig.ApplicationFullPath;
+        WorkerGroup.MonitoringRate := WorkerGroupConfig.MonitoringRate;
+        WorkerGroup.TimeoutKeepAlive := WorkerGroupConfig.TimeoutKeepAlive;
+        WorkerGroup.Boost.Enabled := WorkerGroupConfig.Boost.Enabled;
+        WorkerGroup.Boost.BoostWorkers := WorkerGroupConfig.Boost.BoostWorkers;
+        WorkerGroup.Boost.StartTime := WorkerGroupConfig.Boost.StartTime;
+        WorkerGroup.Boost.EndTime := WorkerGroupConfig.Boost.EndTime;
       end
       else
       begin
         WorkerGroup := TWorkerGroup.Create(Config.ZapMQHost, Config.ZapMQPort);
+        WorkerGroup.ConfigReloaded := True;
+        WorkerGroup.Enabled := WorkerGroupConfig.Enabled;
         WorkerGroup.Name := WorkerGroupConfig.Name;
         WorkerGroup.ApplicationFullPath := WorkerGroupConfig.ApplicationFullPath;
         WorkerGroup.TotalWorkers := WorkerGroupConfig.TotalWorkers;
         WorkerGroup.MonitoringRate := WorkerGroupConfig.MonitoringRate;
         WorkerGroup.TimeoutKeepAlive := WorkerGroupConfig.TimeoutKeepAlive;
+        WorkerGroup.Boost.Enabled := WorkerGroupConfig.Boost.Enabled;
+        WorkerGroup.Boost.BoostWorkers := WorkerGroupConfig.Boost.BoostWorkers;
+        WorkerGroup.Boost.StartTime := WorkerGroupConfig.Boost.StartTime;
+        WorkerGroup.Boost.EndTime := WorkerGroupConfig.Boost.EndTime;
         WorkerGroups.Add(WorkerGroup);
         WorkerGroup.StartWorkers;
       end;

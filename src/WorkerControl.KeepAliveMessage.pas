@@ -29,12 +29,16 @@ var
   Response : TJSONObject;
 begin
   Result := TKeepAliveMessage.Create;
-  Response := TJSONObject.ParseJSONValue(
-    TEncoding.ASCII.GetBytes(pJSON.GetValue<TJSONObject>('Response').ToString), 0) as TJSONObject;
   try
-    Result.ProcessId := Response.GetValue<string>('ProcessId');
-  finally
-    Response.Free;
+    Response := TJSONObject.ParseJSONValue(
+      TEncoding.ASCII.GetBytes(pJSON.GetValue<TJSONObject>('Response').ToString), 0) as TJSONObject;
+    try
+      Result.ProcessId := Response.GetValue<string>('ProcessId');
+    finally
+      Response.Free;
+    end;
+  except
+    Result.ProcessId := pJSON.GetValue<string>('ProcessId');
   end;
 end;
 
