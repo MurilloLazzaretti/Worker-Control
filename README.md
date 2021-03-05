@@ -1,5 +1,5 @@
 ## 🇧🇷  Worker Control - Microservices 🇧🇷
- <b>Worker Control</b> is a windows service developed to monitore your microservices. You control the number of applications you need, check a possible crash and make a balance with a boost in determined time of your choice.
+ <b>Worker Control</b> is a windows service developed to monitore your microservices. You control the number of applications you need, check a possible crash and make a balance with a boost in determinated time of your choice.
 
 ## ⚠️ Warning
 
@@ -16,7 +16,7 @@ Worker Control needs [`ZapMQ server`](https://github.com/MurilloLazzaretti/ZapMQ
 
 ## ⚡️ Configuration
 
-Afeter install Worker Control, in the installation folder, there is a file named ConfigWorkers.json. Change it as you need.
+After install Worker Control, in the installation folder, there is a file named ConfigWorkers.json. Change it as you need.
 
 ```json
 {
@@ -99,4 +99,4 @@ When Worker Control needs to close safelly an app, it will send a message to the
 
 ## 🔥 Uninstall
 
-To uninstall the ZapWorker Control, under the folder of the installation, there is a file named "unins000.exe" just run it and next, next next...
+To uninstall the Worker Control, under the folder of the installation, there is a file named "unins000.exe" just run it and next, next next...
