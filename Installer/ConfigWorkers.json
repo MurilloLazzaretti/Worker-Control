@@ -2,35 +2,6 @@
     "ZapMQHost" : "localhost",
     "ZapMQPort" : 5679,
     "WorkerGroups" : [
-        {
-            "Enabled" : false,
-            "Name" : "My App",
-            "ApplicationFullPath" : "...",
-            "TotalWorkers" : 2,
-            "MonitoringRate": 30000,
-            "TimeoutKeepAlive" : 125000,
-            "Debug" : true,
-            "Boost" : {
-                "Enabled" : false,
-                "BoostWorkers" : 3,
-                "StartTime" : "12:00:00",
-                "EndTime" : "12:30:00"    
-            } 
-        },
-        {
-            "Enabled" : false,
-            "Name" : "My App 2",
-            "ApplicationFullPath" : "...",
-            "TotalWorkers" : 2,
-            "MonitoringRate": 30000,
-            "TimeoutKeepAlive" : 125000,
-            "Debug" : true,
-            "Boost" : {
-                "Enabled" : false,
-                "BoostWorkers" : 3,
-                "StartTime" : "12:00:00",
-                "EndTime" : "12:30:00"    
-            } 
-        }
+        
     ]
 }

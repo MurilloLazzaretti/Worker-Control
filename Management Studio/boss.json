@@ -1,0 +1,11 @@
+{
+	"name": "Management Studio",
+	"description": "Management Studio for microservices monitored by Worker-Control",
+	"version": "1.0.0",
+	"homepage": "https://github.com/MurilloLazzaretti/Worker-Control",
+	"mainsrc": "/src",
+	"projects": [],
+	"dependencies": {
+		"https://github.com/murillolazzaretti/zapmq-delphi-wrapper": "^v1.1.0"
+	}
+}

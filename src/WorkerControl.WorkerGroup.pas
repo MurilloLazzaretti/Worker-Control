@@ -21,7 +21,7 @@ type
     FEnabled: boolean;
     FBoost: TBoostWorkerGroup;
     FConfigReloaded: boolean;
-    FDebug: boolean;
+    FLastSyncConfig: TDateTime;
     procedure SetApplicationFullPath(const Value: string);
     procedure SetTotalWorkers(const Value: integer);
     procedure SetWorkers(const Value: TObjectList<TWorker>);
@@ -41,10 +41,11 @@ type
     procedure SetEnabled(const Value: boolean);
     procedure SetBoost(const Value: TBoostWorkerGroup);
     procedure SetConfigReloaded(const Value: boolean);
-    procedure SetDebug(const Value: boolean);
+    procedure SetLastSyncConfig(const Value: TDateTime);
   protected
     procedure Execute; override;
   public
+    property Event : TEvent read FEvent write FEvent;
     property Enabled : boolean read FEnabled write SetEnabled;
     property Name : string read FName write SetName;
     property ApplicationFullPath : string read FApplicationFullPath write SetApplicationFullPath;
@@ -53,8 +54,8 @@ type
     property TimeoutKeepAlive : Cardinal read FTimeoutKeepAlive write SetTimeoutKeepAlive;
     property Boost : TBoostWorkerGroup read FBoost write SetBoost;
     property Workers : TObjectList<TWorker> read FWorkers write SetWorkers;
-    property Debug : boolean read FDebug write SetDebug;
     property ConfigReloaded : boolean read FConfigReloaded write SetConfigReloaded;
+    property LastSyncConfig : TDateTime read FLastSyncConfig write SetLastSyncConfig;
     procedure StartWorkers;
     procedure StopWorkers;
     constructor Create(const pZapMQHost : string; const pZapMQPort : integer); overload;
@@ -77,6 +78,7 @@ begin
   if ConfigReloaded then
   begin
     ConfigReloaded := False;
+    LastSyncConfig := Now;
     if (Enabled) and (Workers.Count = 0)  then
     begin
       for I := 0 to Pred(TotalWorkers) do
@@ -97,19 +99,22 @@ begin
     end;
   end;
 
-  if TotalWorkers <> Workers.Count then
+  if Enabled then
   begin
-    if TotalWorkers > Workers.Count then
+    if TotalWorkers <> Workers.Count then
     begin
-      Dif := TotalWorkers - Workers.Count;
-      for I := 0 to Pred(Dif) do
-        StartWorker;
-    end
-    else
-    begin
-      Dif := Workers.Count - TotalWorkers;
-      for I := 0 to Pred(Dif) do
-        SafeStopWorker;
+      if TotalWorkers > Workers.Count then
+      begin
+        Dif := TotalWorkers - Workers.Count;
+        for I := 0 to Pred(Dif) do
+          StartWorker;
+      end
+      else
+      begin
+        Dif := Workers.Count - TotalWorkers;
+        for I := 0 to Pred(Dif) do
+          SafeStopWorker;
+      end;
     end;
   end;
 end;
@@ -152,10 +157,8 @@ begin
   Result.lpDesktop := nil;
   Result.lpTitle := nil;
   Result.dwFlags := STARTF_USESHOWWINDOW;
-  if Debug then
-    Result.wShowWindow := SW_SHOWNORMAL
-  else
-    Result.wShowWindow := SW_HIDE;
+  //Result.wShowWindow := SW_SHOWNORMAL;
+  Result.wShowWindow := SW_HIDE;
   Result.cbReserved2 := 0;
   Result.lpReserved2 := nil;
 end;
@@ -201,8 +204,10 @@ begin
   SafeStopMessage.Text := 'STOP';
   JSONMessage := SafeStopMessage.ToJSON;
   try
-    FZapMQWrapper.SendMessage(pWorker.ProcessId.ToString + 'SS', JSONMessage, 10000);
-    Workers.Remove(pWorker);
+    if FZapMQWrapper.SendMessage(pWorker.ProcessId.ToString + 'SS', JSONMessage, 10000) then
+    begin
+      Workers.Remove(pWorker);
+    end;
   finally
     JSONMessage.Free;
     SafeStopMessage.Free;
@@ -264,14 +269,14 @@ begin
   FConfigReloaded := Value;
 end;
 
-procedure TWorkerGroup.SetDebug(const Value: boolean);
-begin
-  FDebug := Value;
-end;
-
 procedure TWorkerGroup.SetEnabled(const Value: boolean);
 begin
   FEnabled := Value;
+end;
+
+procedure TWorkerGroup.SetLastSyncConfig(const Value: TDateTime);
+begin
+  FLastSyncConfig := Value;
 end;
 
 procedure TWorkerGroup.SetMonitoringRate(const Value: Cardinal);
@@ -309,7 +314,7 @@ begin
   begin
     Worker := TWorker.Create;
     Worker.ProcessId := ProcessInfo.dwProcessId;
-    Worker.LastKeepAlive := IncMinute(now, 5);
+    Worker.LastKeepAlive := Now;
     Workers.Add(Worker);
   end;
   CloseHandle(ProcessInfo.hProcess);
@@ -339,6 +344,7 @@ begin
   begin
     SafeStopWorker(Workers[i]);
   end;
+  FZapMQWrapper.SafeStop;
   Workers.Clear;
 end;
 

@@ -1,4 +1,4 @@
-unit WorkerControl.Config;
+unit ManagementStudio.Config;
 
 interface
 
@@ -32,6 +32,8 @@ type
     FMonitoringRate: Cardinal;
     FEnabled: boolean;
     FBoost: TBoostWorkerGroupConfig;
+    FLastSyncConfig: TDateTime;
+    FSynchronizePendind: boolean;
     procedure SetApplicationFullPath(const Value: string);
     procedure SetName(const Value: string);
     procedure SetTotalWorkers(const Value: integer);
@@ -39,6 +41,8 @@ type
     procedure SetTimeoutKeepAlive(const Value: Cardinal);
     procedure SetEnabled(const Value: boolean);
     procedure SetBoost(const Value: TBoostWorkerGroupConfig);
+    procedure SetLastSyncConfig(const Value: TDateTime);
+    procedure SetSynchronizePendind(const Value: boolean);
   public
     property Enabled : boolean read FEnabled write SetEnabled;
     property Name : string read FName write SetName;
@@ -47,6 +51,8 @@ type
     property MonitoringRate : Cardinal read FMonitoringRate write SetMonitoringRate;
     property TimeoutKeepAlive : Cardinal read FTimeoutKeepAlive write SetTimeoutKeepAlive;
     property Boost : TBoostWorkerGroupConfig read FBoost write SetBoost;
+    property LastSyncConfig : TDateTime read FLastSyncConfig write SetLastSyncConfig;
+    property SynchronizePendind : boolean read FSynchronizePendind write SetSynchronizePendind;
     constructor Create; overload;
     destructor Destroy; override;
   end;
@@ -67,6 +73,7 @@ type
     property ZapMQPort : integer read FZapMQPort write SetZapMQPort;
     property RateLoadConfig : Cardinal read FRateLoadConfig write SetRateLoadConfig;
     property WorkerGroupsConfig : TObjectList<TWorkerGroupConfig> read FWorkerGroupsConfig write SetWorkerGroupsConfig;
+    procedure ToFile(const pFileName : string);
     constructor Create; overload;
     destructor Destroy; override;
     class function FromFile(const pFileName : string) : TConfig;
@@ -106,26 +113,61 @@ begin
     Result.ZapMQPort := JSONRootObject.GetValue<integer>('ZapMQPort');
     Result.RateLoadConfig := JSONRootObject.GetValue<Cardinal>('RateLoadConfig');
     JSONArray := JSONRootObject.GetValue<TJSONArray>('WorkerGroups');
-    if JSONArray.Count > 0 then
+    for i := 0 to Pred(JSONArray.Count) do
     begin
-      for i := 0 to Pred(JSONArray.Count) do
-      begin
-        WorkerGroupConfig := TWorkerGroupConfig.Create;
-        WorkerGroupConfig.Enabled := JSONArray.Items[i].GetValue<boolean>('Enabled');
-        WorkerGroupConfig.Name := JSONArray.Items[i].GetValue<string>('Name');
-        WorkerGroupConfig.ApplicationFullPath := JSONArray.Items[i].GetValue<string>('ApplicationFullPath');
-        WorkerGroupConfig.TotalWorkers := JSONArray.Items[i].GetValue<integer>('TotalWorkers');
-        WorkerGroupConfig.MonitoringRate := JSONArray.Items[i].GetValue<Cardinal>('MonitoringRate');
-        WorkerGroupConfig.TimeoutKeepAlive := JSONArray.Items[i].GetValue<Cardinal>('TimeoutKeepAlive');
-
-        JSONBoostObject := JSONArray.Items[i].GetValue<TJSONObject>('Boost');
-        WorkerGroupConfig.Boost.Enabled := JSONBoostObject.GetValue<boolean>('Enabled');
-        WorkerGroupConfig.Boost.BoostWorkers := JSONBoostObject.GetValue<integer>('BoostWorkers');
-        WorkerGroupConfig.Boost.StartTime := StrToTime(JSONBoostObject.GetValue<string>('StartTime'));
-        WorkerGroupConfig.Boost.EndTime := StrToTime(JSONBoostObject.GetValue<string>('EndTime'));
-        Result.WorkerGroupsConfig.Add(WorkerGroupConfig);
-      end;
+      WorkerGroupConfig := TWorkerGroupConfig.Create;
+      WorkerGroupConfig.Enabled := JSONArray.Items[i].GetValue<boolean>('Enabled');
+      WorkerGroupConfig.Name := JSONArray.Items[i].GetValue<string>('Name');
+      WorkerGroupConfig.ApplicationFullPath := JSONArray.Items[i].GetValue<string>('ApplicationFullPath');
+      WorkerGroupConfig.TotalWorkers := JSONArray.Items[i].GetValue<integer>('TotalWorkers');
+      WorkerGroupConfig.MonitoringRate := JSONArray.Items[i].GetValue<Cardinal>('MonitoringRate');
+      WorkerGroupConfig.TimeoutKeepAlive := JSONArray.Items[i].GetValue<Cardinal>('TimeoutKeepAlive');
+      WorkerGroupConfig.SynchronizePendind := False;
+      JSONBoostObject := JSONArray.Items[i].GetValue<TJSONObject>('Boost');
+      WorkerGroupConfig.Boost.Enabled := JSONBoostObject.GetValue<boolean>('Enabled');
+      WorkerGroupConfig.Boost.BoostWorkers := JSONBoostObject.GetValue<integer>('BoostWorkers');
+      WorkerGroupConfig.Boost.StartTime := StrToTime(JSONBoostObject.GetValue<string>('StartTime'));
+      WorkerGroupConfig.Boost.EndTime := StrToTime(JSONBoostObject.GetValue<string>('EndTime'));
+      Result.WorkerGroupsConfig.Add(WorkerGroupConfig);
     end;
+  finally
+    JSONRootObject.Free;
+  end;
+end;
+
+procedure TConfig.ToFile(const pFileName: string);
+var
+  fileName: TFileName;
+  JSONArray : TJSONArray;
+  WorkerGroup : TWorkerGroupConfig;
+  JSONRootObject, JSONWorkerObject, JSONBoostObject : TJSONObject;
+begin
+  fileName := ExtractFilePath(Application.ExeName) + pFileName;
+  JSONRootObject := TJSONObject.Create;
+  try
+    JSONRootObject.AddPair('ZapMQHost', TJSONString.Create(FZapMQHost));
+    JSONRootObject.AddPair('ZapMQPort', TJSONNumber.Create(FZapMQPort));
+    JSONRootObject.AddPair('RateLoadConfig', TJSONNumber.Create(FRateLoadConfig));
+    JSONArray := TJSONArray.Create;
+    for WorkerGroup in WorkerGroupsConfig do
+    begin
+      JSONWorkerObject := TJSONObject.Create;
+      JSONWorkerObject.AddPair('Enabled', TJSONBool.Create(WorkerGroup.Enabled));
+      JSONWorkerObject.AddPair('Name', TJSONString.Create(WorkerGroup.Name));
+      JSONWorkerObject.AddPair('ApplicationFullPath', TJSONString.Create(WorkerGroup.ApplicationFullPath));
+      JSONWorkerObject.AddPair('TotalWorkers', TJSONNumber.Create(WorkerGroup.TotalWorkers));
+      JSONWorkerObject.AddPair('MonitoringRate', TJSONNumber.Create(WorkerGroup.MonitoringRate));
+      JSONWorkerObject.AddPair('TimeoutKeepAlive', TJSONNumber.Create(WorkerGroup.TimeoutKeepAlive));
+      JSONBoostObject := TJSONObject.Create;
+      JSONBoostObject.AddPair('Enabled', TJSONBool.Create(WorkerGroup.Boost.Enabled));
+      JSONBoostObject.AddPair('BoostWorkers', TJSONNumber.Create(WorkerGroup.Boost.BoostWorkers));
+      JSONBoostObject.AddPair('StartTime', TJSONString.Create(TimeToStr(WorkerGroup.Boost.StartTime)));
+      JSONBoostObject.AddPair('EndTime', TJSONString.Create(TimeToStr(WorkerGroup.Boost.EndTime)));
+      JSONWorkerObject.AddPair('Boost', JSONBoostObject);
+      JSONArray.AddElement(JSONWorkerObject);
+    end;
+    JSONRootObject.AddPair('WorkerGroups', JSONArray);
+    TFile.WriteAllText(fileName, JSONRootObject.ToJSON);
   finally
     JSONRootObject.Free;
   end;
@@ -180,6 +222,11 @@ begin
   FEnabled := Value;
 end;
 
+procedure TWorkerGroupConfig.SetLastSyncConfig(const Value: TDateTime);
+begin
+  FLastSyncConfig := Value;
+end;
+
 procedure TWorkerGroupConfig.SetMonitoringRate(const Value: Cardinal);
 begin
   FMonitoringRate := Value;
@@ -188,6 +235,11 @@ end;
 procedure TWorkerGroupConfig.SetName(const Value: string);
 begin
   FName := Value;
+end;
+
+procedure TWorkerGroupConfig.SetSynchronizePendind(const Value: boolean);
+begin
+  FSynchronizePendind := Value;
 end;
 
 procedure TWorkerGroupConfig.SetTimeoutKeepAlive(const Value: Cardinal);

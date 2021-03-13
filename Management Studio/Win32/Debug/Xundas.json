@@ -1,0 +1,1 @@
+[{"Enabled":true,"Name":"Teste","ApplicationFullPath":"C:\\Temp\\bossteste\\Win32\\Debug\\SimpleSample.exe","TotalWorkers":5,"MonitoringRate":30000,"TimeoutKeepAlive":10000,"Boost":{"Enabled":true,"BoostWorkers":3,"StartTime":"14:00:00","EndTime":"15:50:00"}}]

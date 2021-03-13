@@ -35,6 +35,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 [Files]
 Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\ConfigWorkers.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\ManagementStudio.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

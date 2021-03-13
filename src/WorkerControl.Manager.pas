@@ -3,16 +3,23 @@ unit WorkerControl.Manager;
 interface
 
 uses
-  System.Classes, Generics.Collections, WorkerControl.WorkerGroup, SyncObjs;
+  System.Classes, Generics.Collections, WorkerControl.WorkerGroup, SyncObjs,
+  ZapMQ.Wrapper, ZapMQ.Message.JSON, JSON;
 
 type
   TManager = class(TThread)
   private
     FEvent : TEvent;
     FWorkerGroups: TObjectList<TWorkerGroup>;
+    FRateLoadConfig : Cardinal;
+    FZapMQHost : string;
+    FZapMQPort : integer;
+    FZapMQWrapper : TZapMQWrapper;
     procedure SetWorkerGroups(const Value: TObjectList<TWorkerGroup>);
     procedure LoadConfig;
     function GetWorkerGroup(const pName : string) : TWorkerGroup;
+    function AdminHandler(pMessage : TZapJSONMessage;
+      var pProcessing : boolean) : TJSONObject;
   protected
     procedure Execute; override;
   public
@@ -25,9 +32,29 @@ type
 implementation
 
 uses
-  Vcl.Forms, System.SysUtils, WorkerControl.Config, JSON;
+  Vcl.Forms, System.SysUtils, WorkerControl.Config, WorkerControl.StatusMessage;
 
 { TManager }
+
+function TManager.AdminHandler(pMessage: TZapJSONMessage;
+  var pProcessing: boolean): TJSONObject;
+var
+  Json : TJSONObject;
+begin
+  Result := nil;
+  if pMessage.Body.GetValue<string>('Message') = 'CurrentWorkers' then
+  begin
+    Result := TStatusMessage.ToJSON(WorkerGroups);
+  end
+  else if pMessage.Body.GetValue<string>('Message') = 'ReloadConfig' then
+  begin
+    LoadConfig;
+    Json := TJSONObject.Create;
+    Json.AddPair('Message', 'OK');
+    Result := Json;
+  end;
+  pProcessing := False;
+end;
 
 constructor TManager.Create;
 begin
@@ -38,6 +65,8 @@ end;
 
 destructor TManager.Destroy;
 begin
+  if Assigned(FZapMQWrapper) then
+    FZapMQWrapper.Free;
   FEvent.Free;
   inherited;
 end;
@@ -48,7 +77,7 @@ begin
   while not Terminated do
   begin
     LoadConfig;
-    FEvent.WaitFor(30000);
+    FEvent.WaitFor(FRateLoadConfig);
   end;
 end;
 
@@ -75,6 +104,14 @@ var
 begin
   Config := TConfig.FromFile('ConfigWorkers.json');
   try
+    FZapMQHost := Config.ZapMQHost;
+    FZapMQPort := Config.ZapMQPort;
+    FRateLoadConfig := Config.RateLoadConfig;
+    if not Assigned(FZapMQWrapper) then
+    begin
+      FZapMQWrapper := TZapMQWrapper.Create(FZapMQHost, FZapMQPort);
+      FZapMQWrapper.Bind('WorkerControlAdmin', AdminHandler);
+    end;
     for WorkerGroupConfig in Config.WorkerGroupsConfig do
     begin
       WorkerGroup := GetWorkerGroup(WorkerGroupConfig.Name);
@@ -86,7 +123,6 @@ begin
         WorkerGroup.ApplicationFullPath := WorkerGroupConfig.ApplicationFullPath;
         WorkerGroup.MonitoringRate := WorkerGroupConfig.MonitoringRate;
         WorkerGroup.TimeoutKeepAlive := WorkerGroupConfig.TimeoutKeepAlive;
-        WorkerGroup.Debug := WorkerGroupConfig.Debug;
         WorkerGroup.Boost.Enabled := WorkerGroupConfig.Boost.Enabled;
         WorkerGroup.Boost.BoostWorkers := WorkerGroupConfig.Boost.BoostWorkers;
         WorkerGroup.Boost.StartTime := WorkerGroupConfig.Boost.StartTime;
@@ -125,6 +161,7 @@ var
   WorkerGroup : TWorkerGroup;
   I : integer;
 begin
+  FZapMQWrapper.SafeStop;
   Terminate;
   FEvent.SetEvent;
   while not Terminated do;
@@ -132,7 +169,6 @@ begin
   begin
     WorkerGroup := WorkerGroups[i];
     WorkerGroup.StopWorkers;
-    WorkerGroups.Remove(WorkerGroup);
   end;
   WorkerGroups.Free;
 end;

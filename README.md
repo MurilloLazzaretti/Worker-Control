@@ -22,6 +22,7 @@ After install Worker Control, in the installation folder, there is a file named 
 {
     "ZapMQHost" : "localhost",
     "ZapMQPort" : 5679,
+    "RateLoadConfig" : 180000,
     "WorkerGroups" : [
         {
             "Enabled" : false,
@@ -66,6 +67,7 @@ When you change the ConfigWorkers.json you dont need to restart the service, jus
 | --------------------------------- | --------------- | --------------------------------------------- |
 |  ZapMQHost                        | String          | Ip of ZapMQ Service                           |
 |  ZapMQPort                        | Integer         | Port of ZapMQ Service                         |
+|  RateLoadConfig                   | Integer         | Freq to reaload config file                   |
 |  WorkerGroups.Enabled             | Boolean         | Enable / Disable WorkerGroup                  |
 |  WorkerGroups.Name                | String          | Name of your WorkerGroup                      |
 |  WorkerGroups.ApplicationFullPath | String          | Full path to your .exe file                   |

@@ -9,7 +9,8 @@ uses
   WorkerControl.Manager in 'src\WorkerControl.Manager.pas',
   WorkerControl.SafeStopMessage in 'src\WorkerControl.SafeStopMessage.pas',
   WorkerControl.Worker in 'src\WorkerControl.Worker.pas',
-  WorkerControl.WorkerGroup in 'src\WorkerControl.WorkerGroup.pas';
+  WorkerControl.WorkerGroup in 'src\WorkerControl.WorkerGroup.pas',
+  WorkerControl.StatusMessage in 'src\WorkerControl.StatusMessage.pas';
 
 {$R *.RES}
 
