@@ -2,15 +2,15 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "WorkerControl"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.0 Beta"
 #define MyAppPublisher "Murillo Lazzaretti"
-#define MyAppURL "https://github.com/MurilloLazzaretti/worker-control"
-#define MyAppExeName "WorkerControl.exe"
+#define MyAppURL "https://github.com/MurilloLazzaretti/Worker-Control"
+#define MyAppExeName "ManagementStudio.exe"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{5AC75519-600A-4CB2-9389-16AC5F757663}
+AppId={{7901FED3-38C1-4CC1-94DB-3C9CDFAE679F}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
@@ -19,10 +19,11 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
+DisableProgramGroupPage=yes
 LicenseFile=Y:\Prod\GitHub\Murillo\worker-control\LICENSE
 ; Uncomment the following line to run in non administrative install mode (install for current user only.)
 ;PrivilegesRequired=lowest
-DisableProgramGroupPage=yes
+OutputDir=Y:\Prod\GitHub\Murillo\worker-control\Installer\Output
 OutputBaseFilename=WorkerControl - Installer
 Compression=lzma
 SolidCompression=yes
@@ -32,19 +33,24 @@ WizardStyle=modern
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
 [Files]
 Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\ConfigWorkers.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\ManagementStudio.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "Y:\Prod\GitHub\Murillo\worker-control\Installer\WorkerControl.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: " /install"; Flags: runhidden;
-Filename: net.exe; Parameters: "start {#MyAppName}"; Description: "Starting Worker Control service"; Flags: runhidden;
+Filename: "{app}\{#MyAppName}"; Parameters: " /install"; Flags: runhidden;
+Filename: net.exe; Parameters: "start {#MyAppName}"; Description: "Starting WorkerControle service"; Flags: runhidden;
 
 [UninstallRun]
 Filename: net.exe; Parameters: "stop {#MyAppName}"; Flags: runhidden;
-Filename: "{app}\{#MyAppExeName}"; Parameters: " /uninstall"; Flags: runhidden;
+Filename: "{app}\{#MyAppName}"; Parameters: " /uninstall"; Flags: runhidden;
+

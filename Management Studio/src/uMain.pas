@@ -18,12 +18,9 @@ type
     Configuration1: TMenuItem;
     Quit1: TMenuItem;
     StatusBar1: TStatusBar;
-    Worker1: TMenuItem;
     NewGroup1: TMenuItem;
     Edit1: TMenuItem;
     Remove1: TMenuItem;
-    SafeStop1: TMenuItem;
-    Trace1: TMenuItem;
     ImageListTreeView: TImageList;
     Refresh1: TMenuItem;
     Service1: TMenuItem;
@@ -87,7 +84,6 @@ type
     Label8: TLabel;
     lblTotalWorkers: TLabel;
     GroupBox5: TGroupBox;
-    ServerSocket1: TServerSocket;
     procedure FormCreate(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure Edit1Click(Sender: TObject);
@@ -102,6 +98,7 @@ type
     procedure Start1Click(Sender: TObject);
     procedure btnStartTraceClick(Sender: TObject);
     procedure btnStopTraceClick(Sender: TObject);
+    procedure Quit1Click(Sender: TObject);
   private
     FWorkerControlConfig : TConfig;
     FWorkers : TObjectList<TWorker>;
@@ -267,11 +264,13 @@ begin
   TotalWorkers := StrToInt(lblTotalWorkers.Caption);
   if TotalWorkers <= 0 then
   begin
-
+    MessageDlg('There is no Workers available to start trace!', mtError,
+      [mbOK], 0);
   end
   else if TotalWorkers > 10 then
   begin
-
+    MessageDlg('There are more than 10 workers running, please reconfigure to up to 10 workes and try again!', mtError,
+      [mbOK], 0);
   end
   else
   begin
@@ -442,12 +441,22 @@ end;
 
 procedure TFrmMain.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
-  FZapMQWrapper.SafeStop;
-  FZapMQWrapper.Free;
-  if Assigned(FWorkerControlConfig) then
-    FWorkerControlConfig.Free;
-  if Assigned(FWorkers) then
-    FWorkers.Free;
+  if btnStopTrace.Enabled then
+  begin
+    MessageDlg('Please, stop the current Trace Online before quit the application!', mtError,
+      [mbOK], 0);
+    Action := TCloseAction.caNone;
+  end
+  else
+  begin
+    FZapMQWrapper.SafeStop;
+    FZapMQWrapper.Free;
+    if Assigned(FWorkerControlConfig) then
+      FWorkerControlConfig.Free;
+    if Assigned(FWorkers) then
+      FWorkers.Free;
+    Action := TCloseAction.caFree;
+  end;
 end;
 
 procedure TFrmMain.FormCreate(Sender: TObject);
@@ -542,6 +551,19 @@ begin
   GroupBoxButtonsEdit.Visible := True;
   txtName.Enabled := True;
   ClearGroupInformation;
+end;
+
+procedure TFrmMain.Quit1Click(Sender: TObject);
+begin
+  if btnStopTrace.Enabled then
+  begin
+    MessageDlg('Please, stop the current Trace Online before quit the application!', mtError,
+      [mbOK], 0);
+  end
+  else
+  begin
+    FrmMain.Close;
+  end;
 end;
 
 procedure TFrmMain.Refresh1Click(Sender: TObject);
@@ -684,6 +706,7 @@ begin
   else if NodeSelected.Level > 0 then
   begin
     PageControl1.Visible := True;
+    PageControl1.ActivePageIndex := 0;
     while NodeSelected.Level <> 1 do
     begin
       NodeSelected := NodeSelected.GetPrev;

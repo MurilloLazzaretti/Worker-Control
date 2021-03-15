@@ -61,13 +61,9 @@ end;
 procedure TWorker.ContactWorkerHandler(pMessage: TJSONObject;
   var pProcessing: boolean);
 begin
-  if pMessage.P['Response.message'].Value = 'on' then
+  if pMessage.P['Response.message'].Value = 'off' then
   begin
-    FMemoDest.Lines.Add('*** Waiting for worker to connect ***');
-  end
-  else
-  begin
-    FMemoDest.Lines.Add('*** Client disconnect ***');
+    FMemoDest.Lines.Add('*** Worker disconnected ***');
     if Assigned(FServerSocket) then
     begin
       FServerSocket.Active := False;
@@ -91,7 +87,6 @@ end;
 procedure TWorker.OnWorkerDisconnect(Sender: TObject; Socket: TCustomWinSocket);
 begin
   FMemoDest.Lines.Add('*** Worker Disconnected ***');
-  //StopTrace;
 end;
 
 procedure TWorker.ServerSocketOn;

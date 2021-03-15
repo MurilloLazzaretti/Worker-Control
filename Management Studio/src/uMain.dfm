@@ -78,7 +78,6 @@ object FrmMain: TFrmMain
         Align = alTop
         TabOrder = 0
         Visible = False
-        ExplicitTop = 4
         object btnCancelEditInformation: TButton
           AlignWithMargins = True
           Left = 47
@@ -112,8 +111,6 @@ object FrmMain: TFrmMain
         Align = alClient
         Enabled = False
         TabOrder = 1
-        ExplicitTop = 46
-        ExplicitHeight = 615
         object GroupBox1: TGroupBox
           AlignWithMargins = True
           Left = 4
@@ -122,7 +119,6 @@ object FrmMain: TFrmMain
           Height = 601
           Align = alClient
           TabOrder = 0
-          ExplicitHeight = 607
           DesignSize = (
             697
             601)
@@ -316,8 +312,6 @@ object FrmMain: TFrmMain
     object TabSheetTrace: TTabSheet
       Caption = 'Online Trace'
       ImageIndex = 1
-      ExplicitLeft = 0
-      ExplicitTop = 0
       object Label7: TLabel
         Left = 3
         Top = 64
@@ -354,8 +348,6 @@ object FrmMain: TFrmMain
         Height = 46
         Align = alTop
         TabOrder = 0
-        ExplicitLeft = 6
-        ExplicitTop = 11
         object btnStopTrace: TButton
           AlignWithMargins = True
           Left = 47
@@ -390,9 +382,6 @@ object FrmMain: TFrmMain
         Height = 531
         Align = alBottom
         TabOrder = 1
-        ExplicitLeft = 0
-        ExplicitTop = 136
-        ExplicitWidth = 711
         object PageControlTrace: TPageControl
           AlignWithMargins = True
           Left = 5
@@ -403,8 +392,6 @@ object FrmMain: TFrmMain
           Align = alBottom
           TabOrder = 0
           object TabSheet1: TTabSheet
-            ExplicitWidth = 697
-            ExplicitHeight = 478
             object Memo1: TMemo
               AlignWithMargins = True
               Left = 3
@@ -419,7 +406,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet2: TTabSheet
             ImageIndex = 1
-            ExplicitHeight = 478
             object Memo2: TMemo
               AlignWithMargins = True
               Left = 3
@@ -434,7 +420,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet3: TTabSheet
             ImageIndex = 2
-            ExplicitHeight = 478
             object Memo3: TMemo
               AlignWithMargins = True
               Left = 3
@@ -449,7 +434,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet4: TTabSheet
             ImageIndex = 3
-            ExplicitHeight = 478
             object Memo4: TMemo
               AlignWithMargins = True
               Left = 3
@@ -464,7 +448,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet5: TTabSheet
             ImageIndex = 4
-            ExplicitHeight = 478
             object Memo5: TMemo
               AlignWithMargins = True
               Left = 3
@@ -479,7 +462,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet6: TTabSheet
             ImageIndex = 5
-            ExplicitHeight = 478
             object Memo6: TMemo
               AlignWithMargins = True
               Left = 3
@@ -494,7 +476,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet7: TTabSheet
             ImageIndex = 6
-            ExplicitHeight = 478
             object Memo7: TMemo
               AlignWithMargins = True
               Left = 3
@@ -509,7 +490,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet8: TTabSheet
             ImageIndex = 7
-            ExplicitHeight = 478
             object Memo8: TMemo
               AlignWithMargins = True
               Left = 3
@@ -524,7 +504,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet9: TTabSheet
             ImageIndex = 8
-            ExplicitHeight = 478
             object Memo9: TMemo
               AlignWithMargins = True
               Left = 3
@@ -539,7 +518,6 @@ object FrmMain: TFrmMain
           end
           object TabSheet10: TTabSheet
             ImageIndex = 9
-            ExplicitHeight = 478
             object Memo10: TMemo
               AlignWithMargins = True
               Left = 3
@@ -592,17 +570,9 @@ object FrmMain: TFrmMain
         OnClick = Refresh1Click
       end
     end
-    object Worker1: TMenuItem
-      Caption = 'Worker'
-      object SafeStop1: TMenuItem
-        Caption = 'Safe Stop'
-      end
-      object Trace1: TMenuItem
-        Caption = 'Trace'
-      end
-    end
     object Quit1: TMenuItem
       Caption = 'Quit'
+      OnClick = Quit1Click
     end
   end
   object ImageListTreeView: TImageList
@@ -1548,12 +1518,5 @@ object FrmMain: TFrmMain
       FFFFFFF80003FC1FE3FE0000F0000000FFFFFFFE000FFE0003FF8003F0000000
       FFFFFFFF803FFF0007FFE00FF000000000000000000000000000000000000000
       000000000000}
-  end
-  object ServerSocket1: TServerSocket
-    Active = False
-    Port = 0
-    ServerType = stNonBlocking
-    Left = 536
-    Top = 376
   end
 end

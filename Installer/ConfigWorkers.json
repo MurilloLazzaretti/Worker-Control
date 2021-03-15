@@ -1,6 +1,7 @@
 {
     "ZapMQHost" : "localhost",
     "ZapMQPort" : 5679,
+    "RateLoadConfig" : 180000,
     "WorkerGroups" : [
         
     ]
