@@ -461,6 +461,7 @@ end;
 
 procedure TFrmMain.FormCreate(Sender: TObject);
 begin
+  PageControl1.ActivePageIndex := 0;
   StatusBar1.Panels[2].Text := 'Service Status :' +  TServiceManager.GetServiceState;
   LoadConfigFile;
   FZapMQWrapper := TZapMQWrapper.Create(FWorkerControlConfig.ZapMQHost,

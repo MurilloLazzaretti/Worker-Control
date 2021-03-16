@@ -100,34 +100,37 @@ var
 begin
   Result := TConfig.Create;
   fileName := ExtractFilePath(Application.ExeName) + pFileName;
-  JSONRootObject := TJSONObject.ParseJSONValue(TFile.ReadAllText(fileName)) as TJSONObject;
-  try
-    Result.ZapMQHost := JSONRootObject.GetValue<string>('ZapMQHost');
-    Result.ZapMQPort := JSONRootObject.GetValue<integer>('ZapMQPort');
-    Result.RateLoadConfig := JSONRootObject.GetValue<Cardinal>('RateLoadConfig');
-    JSONArray := JSONRootObject.GetValue<TJSONArray>('WorkerGroups');
-    if JSONArray.Count > 0 then
-    begin
-      for i := 0 to Pred(JSONArray.Count) do
+  if FileExists(fileName) then
+  begin
+    JSONRootObject := TJSONObject.ParseJSONValue(TFile.ReadAllText(fileName)) as TJSONObject;
+    try
+      Result.ZapMQHost := JSONRootObject.GetValue<string>('ZapMQHost');
+      Result.ZapMQPort := JSONRootObject.GetValue<integer>('ZapMQPort');
+      Result.RateLoadConfig := JSONRootObject.GetValue<Cardinal>('RateLoadConfig');
+      JSONArray := JSONRootObject.GetValue<TJSONArray>('WorkerGroups');
+      if JSONArray.Count > 0 then
       begin
-        WorkerGroupConfig := TWorkerGroupConfig.Create;
-        WorkerGroupConfig.Enabled := JSONArray.Items[i].GetValue<boolean>('Enabled');
-        WorkerGroupConfig.Name := JSONArray.Items[i].GetValue<string>('Name');
-        WorkerGroupConfig.ApplicationFullPath := JSONArray.Items[i].GetValue<string>('ApplicationFullPath');
-        WorkerGroupConfig.TotalWorkers := JSONArray.Items[i].GetValue<integer>('TotalWorkers');
-        WorkerGroupConfig.MonitoringRate := JSONArray.Items[i].GetValue<Cardinal>('MonitoringRate');
-        WorkerGroupConfig.TimeoutKeepAlive := JSONArray.Items[i].GetValue<Cardinal>('TimeoutKeepAlive');
+        for i := 0 to Pred(JSONArray.Count) do
+        begin
+          WorkerGroupConfig := TWorkerGroupConfig.Create;
+          WorkerGroupConfig.Enabled := JSONArray.Items[i].GetValue<boolean>('Enabled');
+          WorkerGroupConfig.Name := JSONArray.Items[i].GetValue<string>('Name');
+          WorkerGroupConfig.ApplicationFullPath := JSONArray.Items[i].GetValue<string>('ApplicationFullPath');
+          WorkerGroupConfig.TotalWorkers := JSONArray.Items[i].GetValue<integer>('TotalWorkers');
+          WorkerGroupConfig.MonitoringRate := JSONArray.Items[i].GetValue<Cardinal>('MonitoringRate');
+          WorkerGroupConfig.TimeoutKeepAlive := JSONArray.Items[i].GetValue<Cardinal>('TimeoutKeepAlive');
 
-        JSONBoostObject := JSONArray.Items[i].GetValue<TJSONObject>('Boost');
-        WorkerGroupConfig.Boost.Enabled := JSONBoostObject.GetValue<boolean>('Enabled');
-        WorkerGroupConfig.Boost.BoostWorkers := JSONBoostObject.GetValue<integer>('BoostWorkers');
-        WorkerGroupConfig.Boost.StartTime := StrToTime(JSONBoostObject.GetValue<string>('StartTime'));
-        WorkerGroupConfig.Boost.EndTime := StrToTime(JSONBoostObject.GetValue<string>('EndTime'));
-        Result.WorkerGroupsConfig.Add(WorkerGroupConfig);
+          JSONBoostObject := JSONArray.Items[i].GetValue<TJSONObject>('Boost');
+          WorkerGroupConfig.Boost.Enabled := JSONBoostObject.GetValue<boolean>('Enabled');
+          WorkerGroupConfig.Boost.BoostWorkers := JSONBoostObject.GetValue<integer>('BoostWorkers');
+          WorkerGroupConfig.Boost.StartTime := StrToTime(JSONBoostObject.GetValue<string>('StartTime'));
+          WorkerGroupConfig.Boost.EndTime := StrToTime(JSONBoostObject.GetValue<string>('EndTime'));
+          Result.WorkerGroupsConfig.Add(WorkerGroupConfig);
+        end;
       end;
+    finally
+      JSONRootObject.Free;
     end;
-  finally
-    JSONRootObject.Free;
   end;
 end;
 
