@@ -9,7 +9,7 @@
 | 2.x (.NET) | this branch (`main`) | in development |
 | 1.x (Delphi) | branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1), last tag [`v1.1.1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.1) | maintenance |
 
-Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). So far the first step is done: the service itself. Management Studio 1.x keeps working against it until the web panel exists.
+Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). So far the service is done, with its history and its administration over ZapMQ. Management Studio 1.x keeps working against it until the web panel exists.
 
 ## 🧬 Resources
 
@@ -39,7 +39,23 @@ A group whose instances keep failing right after starting waits longer and longe
 
 🚀 _Boost_
 
-A daily window in which a group runs extra instances. It may cross midnight.
+Windows of time in which a group runs extra instances, on the days of the week you choose. A window may cross midnight.
+
+📈 _Scaling by the queue_
+
+A group gets extra instances while its queue in ZapMQ has messages piling up, and gives them back some time after it empties.
+
+♻️ _Recycling_
+
+At a time of your choice, the instances of a group are replaced one by one, the new one up before the old one leaves. The same can be asked for at any moment, for a group or for a single instance.
+
+🗂 _History and health_
+
+Every start, exit, replacement and stop is kept, along with processor, memory and keep-alive response time of each instance.
+
+🎛 _Administration over ZapMQ_
+
+Status, configuration, manual actions, history and health are available to whoever reaches ZapMQ, from any machine. It is what the web panel will use.
 
 ## 💉 Dependency
 
@@ -68,7 +84,12 @@ From the repository root:
 dotnet publish src/WorkerControl.Service -c Release -r win-x64 -o publish/win-x64
 ```
 
-The folder `publish/win-x64` now has `WorkerControl.exe`.
+The folder `publish/win-x64` now has the two files the service needs:
+
+| File | What it is |
+| ---- | ---------- |
+| `WorkerControl.exe` | the service |
+| `e_sqlite3.dll` | the SQLite engine, used for the history |
 
 ## ⚡️ Configuration
 
@@ -133,7 +154,25 @@ All optional. The ones marked "root or group" may be given once at the root, for
 | `Arguments` | group | empty | Arguments passed to the executable |
 | `WorkingDirectory` | group | folder of the executable | Working folder of the instance |
 
+| `EventRetentionDays` | root | 30 | How long the history of events is kept |
+| `HealthRetentionHours` | root | 24 | How long the health measurements are kept |
+| `BoostWindows` | group | none | Boost windows, see below |
+| `QueueScaling` | group | none | Scaling by the queue, see below |
+| `Recycle` | group | none | Scheduled recycling, see below |
+
 `TimeoutKeepAlive` no longer has to cover the time an application takes to start; that is what `StartupGraceMs` is for.
+
+```json
+"BoostWindows": [
+    { "Workers": 3, "StartTime": "22:00:00", "EndTime": "02:00:00", "Days": ["mon", "tue", "wed", "thu", "fri"] }
+],
+"QueueScaling": { "Queue": "Orders", "PendingPerWorker": 50, "MaxWorkers": 8, "CooldownMs": 120000 },
+"Recycle": { "Time": "03:00:00", "Days": ["sun"] }
+```
+
+- **`BoostWindows`**: `Workers` extra instances between `StartTime` and `EndTime`. `Days` takes `mon` to `sun`; left out, it is every day. A window that crosses midnight belongs to the day it starts on. Windows that overlap do not add up: the largest wins. The `Boost` of 1.x keeps working, as one more window.
+- **`QueueScaling`**: one extra instance for each `PendingPerWorker` messages waiting in `Queue`, never taking the group above `MaxWorkers`. The extra ones leave `CooldownMs` after the queue stops asking for them. Needs ZapMQ 2.x.
+- **`Recycle`**: at `Time`, on `Days`, every instance of the group is replaced, one at a time.
 
 Management Studio 1.x writes the file with the settings it knows. Saving from it drops the new ones.
 
@@ -141,7 +180,7 @@ Management Studio 1.x writes the file with the settings it knows. Saving from it
 
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.
 
-1. Copy `WorkerControl.exe` and your `ConfigWorkers.json` to `C:\WorkerControl`. If you use Management Studio, it goes in the same folder: it edits that same file.
+1. Copy `WorkerControl.exe`, `e_sqlite3.dll` and your `ConfigWorkers.json` to `C:\WorkerControl`. If you use Management Studio, it goes in the same folder: it edits that same file.
 
 2. Register the service and start it:
 
@@ -179,7 +218,35 @@ To go back, stop the service and run `sc.exe config` again with the path of the 
 
 What is different for the applications: an instance now starts in the folder of its own executable, where 1.x started it in the folder of the service. An application that depended on that needs `WorkingDirectory`.
 
-## 📜 Log
+## 🎛 Administration
+
+Requests go to the queue `WorkerControlAdmin`, as RPC messages. The two commands of 1.x (`{"Message": "CurrentWorkers"}` and `{"Message": "ReloadConfig"}`) are answered as 1.x answered them. The commands of 2.0 carry `Command`:
+
+```json
+{ "Command": "SetGroupWorkers", "Group": "Orders", "TotalWorkers": 4, "By": "ana" }
+```
+
+```json
+{ "Ok": true }
+{ "Ok": false, "Error": { "Code": "not-found", "Message": "There is no group named \"Orders\"" } }
+```
+
+| _Command_ | _Fields_ | _What it does_ |
+| --------- | -------- | -------------- |
+| `Status` | | The service, its groups and workers: state, how many are wanted and why, health |
+| `GetConfig` | | The configuration file, as text and as an object |
+| `SetConfig` | `Config` | Replaces the configuration file, after validating it |
+| `SetGroupEnabled` | `Group`, `Enabled` | Enables or disables a group |
+| `SetGroupWorkers` | `Group`, `TotalWorkers` | Changes the number of instances of a group |
+| `RestartWorker` | `ProcessId` | Replaces one instance; it leaves once its substitute is up |
+| `RestartGroup` | `Group` | Replaces every instance of a group, one at a time |
+| `Events` | `Group`, `Kind`, `From`, `To`, `Limit` (all optional) | The history, most recent first |
+| `Health` | `Group`, `ProcessId`, `From`, `To`, `Limit` (all optional) | The measurements, oldest first |
+| `DetachAndStop` | | Stops the service leaving the instances running |
+
+`By`, optional in any command that changes something, is recorded in the history. The changes to groups are written to `ConfigWorkers.json`, keeping the previous version as `ConfigWorkers.json.bak`.
+
+## 📜 Log and history
 
 One file per day in `logs`, next to the executable. Every start, exit, replacement and stop is there, with the group and the process id:
 
@@ -189,6 +256,8 @@ WorkerUp [Orders] pid 4812: answered after 1.4 s
 WorkerCrashed [Orders] pid 4812: exit code 1, after 37 min
 WorkerHung [Orders] pid 5120: no answer to the keep-alive in 15 s
 ```
+
+Next to the executable there are also `workercontrol.db`, a SQLite file with the history of events and the health measurements, and `state.json`, with the instances being supervised.
 
 ## ⬆️ Update
 

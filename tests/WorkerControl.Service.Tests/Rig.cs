@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Newtonsoft.Json.Linq;
 using WorkerControl.Service;
@@ -102,9 +103,16 @@ public sealed class Rig : IAsyncDisposable
         _service = ServiceHost.Build([], builder => builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["WorkerControl:DataDirectory"] = Directory,
-            ["WorkerControl:TickMilliseconds"] = "50"
+            ["WorkerControl:TickMilliseconds"] = "50",
+            ["WorkerControl:HealthSampleSeconds"] = "1"
         }));
         await _service.StartAsync();
+
+        // A host that is run, as the real service is, stops when the application asks to.
+        // Here it is only started, so the same has to be arranged by hand.
+        var service = _service;
+        service.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(() =>
+            Task.Run(() => service.StopAsync()));
     }
 
     public async Task StopServiceAsync()
@@ -131,6 +139,27 @@ public sealed class Rig : IAsyncDisposable
         _admin.OnRPCExpired = previous;
         return result;
     }
+
+    /// <summary>
+    /// A command of the 2.0 contract, sent over ZapMQ. Null when nobody answered.
+    /// </summary>
+    public async Task<JObject?> CommandAsync(string command, Action<JObject>? more = null)
+    {
+        var request = new JObject { ["Command"] = command, ["Version"] = 1 };
+        more?.Invoke(request);
+        var answer = new TaskCompletionSource<JObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_admin.SendRPCMessage("WorkerControlAdmin", request, message => answer.TrySetResult(message.Response as JObject), 5000))
+            return null;
+        var first = await Task.WhenAny(answer.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        return first == answer.Task ? await answer.Task : null;
+    }
+
+    /// <summary>
+    /// A publisher of its own, to fill queues the way an application would.
+    /// </summary>
+    public bool Publish(string queue, object body) => _admin.SendMessage(queue, body);
+
+    public string ConfigText() => File.ReadAllText(Path.Combine(Directory, "ConfigWorkers.json"));
 
     public async Task<bool> ReloadConfigAsync()
     {

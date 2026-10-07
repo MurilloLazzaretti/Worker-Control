@@ -21,6 +21,24 @@ public interface IWorkerProcess
     /// Ends the process at once, without asking.
     /// </summary>
     void Kill();
+
+    /// <summary>
+    /// Processor time used so far and memory in use. Null when it cannot be read.
+    /// </summary>
+    ProcessUsage? GetUsage();
+}
+
+public readonly record struct ProcessUsage(TimeSpan ProcessorTime, long MemoryBytes);
+
+/// <summary>
+/// How many messages wait in a queue of the broker.
+/// </summary>
+public interface IQueueMonitor
+{
+    /// <summary>
+    /// Null when the broker cannot tell (unreachable, or a version that does not count).
+    /// </summary>
+    int? PendingMessages(string queue);
 }
 
 public interface IProcessHost
@@ -99,7 +117,16 @@ public enum EventKind
     GroupStable,
     GroupRemoved,
     BoostStarted,
-    BoostEnded
+    BoostEnded,
+    ScaleChanged,
+    RecycleStarted,
+    RecycleFinished,
+
+    // Raised by the service, not by the supervisor.
+    ServiceStarted,
+    ServiceStopped,
+    ConfigRefused,
+    ManualAction
 }
 
 public sealed record SupervisorEvent(DateTimeOffset At, EventKind Kind, string? Group, int? ProcessId, string Detail);
@@ -109,12 +136,34 @@ public sealed record WorkerStatus(
     WorkerState State,
     DateTimeOffset StartedAt,
     DateTimeOffset? LastKeepAlive,
-    bool Adopted);
+    TimeSpan? KeepAliveLatency,
+    bool Adopted,
+    bool BeingReplaced);
 
+/// <summary>
+/// A group as it is now. The number of workers it wants is the base plus what the boost and
+/// the queue are asking for.
+/// </summary>
 public sealed record GroupStatus(
     GroupConfig Config,
     int DesiredWorkers,
-    bool BoostActive,
+    int BoostWorkers,
+    int ScaleWorkers,
+    bool Recycling,
     bool Unstable,
     DateTimeOffset LastSyncConfig,
-    IReadOnlyList<WorkerStatus> Workers);
+    IReadOnlyList<WorkerStatus> Workers)
+{
+    public bool BoostActive => BoostWorkers > 0;
+}
+
+/// <summary>
+/// One measurement of one worker.
+/// </summary>
+public sealed record HealthSample(
+    string Group,
+    int ProcessId,
+    WorkerState State,
+    TimeSpan Uptime,
+    ProcessUsage? Usage,
+    TimeSpan? KeepAliveLatency);

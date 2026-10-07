@@ -47,7 +47,7 @@ internal sealed class ZapMQBroker : IBroker, IDisposable
     private long _lastFailure = DateTimeOffset.MinValue.UtcTicks;
     private int _healthy = -1;
 
-    public ZapMQBroker(string host, int port, TimeProvider time, ILogger logger, Func<string, JObject?> admin)
+    public ZapMQBroker(string host, int port, TimeProvider time, ILogger logger, Func<JObject, JObject?> admin)
     {
         _time = time;
         _logger = logger;
@@ -71,8 +71,7 @@ internal sealed class ZapMQBroker : IBroker, IDisposable
             processing = false;
             try
             {
-                var command = (message.Body as JObject)?.Value<string>("Message") ?? "";
-                return admin(command)!;
+                return admin(message.Body as JObject ?? new JObject())!;
             }
             catch (Exception error)
             {

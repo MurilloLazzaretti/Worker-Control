@@ -25,6 +25,16 @@ public sealed record WorkerControlConfig
 
     public TimeSpan StartBatchInterval { get; init; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How long the history of events is kept.
+    /// </summary>
+    public TimeSpan EventRetention { get; init; } = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// How long the health measurements are kept.
+    /// </summary>
+    public TimeSpan HealthRetention { get; init; } = TimeSpan.FromHours(24);
+
     public IReadOnlyList<GroupConfig> Groups { get; init; } = [];
 }
 
@@ -75,13 +85,110 @@ public sealed record GroupConfig
     /// </summary>
     public int CrashLimit { get; init; } = 3;
 
+    /// <summary>
+    /// The single daily window of 1.x.
+    /// </summary>
     public BoostConfig Boost { get; init; } = new();
 
+    public IReadOnlyList<BoostWindow> BoostWindows { get; init; } = [];
+
+    public QueueScalingConfig? QueueScaling { get; init; }
+
+    public RecycleConfig? Recycle { get; init; }
+
     /// <summary>
-    /// How many workers the group should have at this time of day.
+    /// The extra workers the boost asks for at this moment. Windows that overlap do not add
+    /// up: the one asking for the most wins.
     /// </summary>
-    public int DesiredWorkers(TimeSpan timeOfDay) =>
-        !Enabled ? 0 : TotalWorkers + (Boost.IsActive(timeOfDay) ? Boost.BoostWorkers : 0);
+    public int BoostWorkersAt(DateTime localNow)
+    {
+        var extra = Boost.IsActive(localNow.TimeOfDay) ? Boost.BoostWorkers : 0;
+        foreach (var window in BoostWindows)
+            if (window.IsActive(localNow))
+                extra = Math.Max(extra, window.Workers);
+        return extra;
+    }
+}
+
+/// <summary>
+/// A window in which the group runs extra workers, on some days of the week or on all of them.
+/// </summary>
+public sealed record BoostWindow
+{
+    public int Workers { get; init; }
+
+    public TimeSpan StartTime { get; init; }
+
+    public TimeSpan EndTime { get; init; }
+
+    /// <summary>
+    /// Null means every day. The day is the one the window starts on.
+    /// </summary>
+    public IReadOnlySet<DayOfWeek>? Days { get; init; }
+
+    public bool IsActive(DateTime localNow)
+    {
+        if (Workers <= 0 || StartTime == EndTime)
+            return false;
+
+        var time = localNow.TimeOfDay;
+        if (StartTime < EndTime)
+            return time >= StartTime && time < EndTime && OnDay(localNow.DayOfWeek);
+
+        // Crosses midnight: after it, the window is the one that started the day before.
+        if (time >= StartTime)
+            return OnDay(localNow.DayOfWeek);
+        return time < EndTime && OnDay(localNow.AddDays(-1).DayOfWeek);
+    }
+
+    private bool OnDay(DayOfWeek day) => Days is null || Days.Contains(day);
+}
+
+/// <summary>
+/// Extra workers while a queue has messages piling up.
+/// </summary>
+public sealed record QueueScalingConfig
+{
+    public required string Queue { get; init; }
+
+    /// <summary>
+    /// One extra worker for each this many pending messages.
+    /// </summary>
+    public int PendingPerWorker { get; init; } = 50;
+
+    /// <summary>
+    /// The most workers the group may have, counting everything.
+    /// </summary>
+    public int MaxWorkers { get; init; }
+
+    /// <summary>
+    /// How long the extra workers stay after the queue no longer asks for them.
+    /// </summary>
+    public TimeSpan Cooldown { get; init; } = TimeSpan.FromMinutes(2);
+}
+
+/// <summary>
+/// A time of day at which the workers of the group are replaced, one by one.
+/// </summary>
+public sealed record RecycleConfig
+{
+    public TimeSpan Time { get; init; }
+
+    public IReadOnlySet<DayOfWeek>? Days { get; init; }
+
+    /// <summary>
+    /// The next time the recycle is due, strictly after the given moment.
+    /// </summary>
+    public DateTime NextAfter(DateTime localNow)
+    {
+        for (var ahead = 0; ahead <= 7; ahead++)
+        {
+            var candidate = localNow.Date.AddDays(ahead) + Time;
+            if (candidate > localNow && (Days is null || Days.Contains(candidate.DayOfWeek)))
+                return candidate;
+        }
+        return DateTime.MaxValue;
+    }
 }
 
 /// <summary>
@@ -151,6 +258,8 @@ public static class ConfigReader
                 RateLoadConfig = Milliseconds(root, "RateLoadConfig", "", TimeSpan.FromMinutes(3), minimum: 1000),
                 StartBatchSize = Integer(root, "StartBatchSize", "", defaultValue: 4, minimum: 1),
                 StartBatchInterval = Milliseconds(root, "StartBatchIntervalMs", "", TimeSpan.FromSeconds(2), minimum: 0),
+                EventRetention = TimeSpan.FromDays(Integer(root, "EventRetentionDays", "", defaultValue: 30, minimum: 1)),
+                HealthRetention = TimeSpan.FromHours(Integer(root, "HealthRetentionHours", "", defaultValue: 24, minimum: 1)),
                 Groups = ReadGroups(root, general)
             };
             return config;
@@ -195,7 +304,10 @@ public static class ConfigReader
                 SafeStopTimeout = defaults.Milliseconds("SafeStopTimeoutMs", TimeSpan.FromSeconds(30)),
                 CrashWindow = defaults.Milliseconds("CrashWindowMs", TimeSpan.FromSeconds(60)),
                 CrashLimit = defaults.Integer("CrashLimit", 3),
-                Boost = ReadBoost(item, where)
+                Boost = ReadBoost(item, where),
+                BoostWindows = ReadBoostWindows(item, where),
+                QueueScaling = ReadQueueScaling(item, where),
+                Recycle = ReadRecycle(item, where)
             });
         }
         return groups;
@@ -216,6 +328,88 @@ public static class ConfigReader
             StartTime = TimeOfDay(boost, "StartTime", where),
             EndTime = TimeOfDay(boost, "EndTime", where)
         };
+    }
+
+    private static List<BoostWindow> ReadBoostWindows(JsonElement group, string where)
+    {
+        var windows = new List<BoostWindow>();
+        if (!group.TryGetProperty("BoostWindows", out var array) || array.ValueKind == JsonValueKind.Null)
+            return windows;
+        if (array.ValueKind != JsonValueKind.Array)
+            throw new ConfigException($"\"BoostWindows\" must be a list in {where}");
+
+        where = "a boost window of " + where;
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new ConfigException($"Every boost window must be an object in {where}");
+            windows.Add(new BoostWindow
+            {
+                Workers = Integer(item, "Workers", where, required: true, minimum: 1),
+                StartTime = TimeOfDay(item, "StartTime", where),
+                EndTime = TimeOfDay(item, "EndTime", where),
+                Days = Days(item, where)
+            });
+        }
+        return windows;
+    }
+
+    private static QueueScalingConfig? ReadQueueScaling(JsonElement group, string where)
+    {
+        if (!group.TryGetProperty("QueueScaling", out var scaling) || scaling.ValueKind == JsonValueKind.Null)
+            return null;
+        if (scaling.ValueKind != JsonValueKind.Object)
+            throw new ConfigException($"\"QueueScaling\" must be an object in {where}");
+
+        where = "the queue scaling of " + where;
+        var queue = Text(scaling, "Queue", where);
+        if (string.IsNullOrWhiteSpace(queue))
+            throw new ConfigException($"\"Queue\" is required in {where}");
+        return new QueueScalingConfig
+        {
+            Queue = queue,
+            PendingPerWorker = Integer(scaling, "PendingPerWorker", where, defaultValue: 50, minimum: 1),
+            MaxWorkers = Integer(scaling, "MaxWorkers", where, required: true, minimum: 1),
+            Cooldown = Milliseconds(scaling, "CooldownMs", where, TimeSpan.FromMinutes(2), minimum: 0)
+        };
+    }
+
+    private static RecycleConfig? ReadRecycle(JsonElement group, string where)
+    {
+        if (!group.TryGetProperty("Recycle", out var recycle) || recycle.ValueKind == JsonValueKind.Null)
+            return null;
+        if (recycle.ValueKind != JsonValueKind.Object)
+            throw new ConfigException($"\"Recycle\" must be an object in {where}");
+
+        where = "the recycle of " + where;
+        if (!recycle.TryGetProperty("Time", out _))
+            throw new ConfigException($"\"Time\" is required in {where}");
+        return new RecycleConfig { Time = TimeOfDay(recycle, "Time", where), Days = Days(recycle, where) };
+    }
+
+    private static readonly Dictionary<string, DayOfWeek> DayNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["sun"] = DayOfWeek.Sunday, ["mon"] = DayOfWeek.Monday, ["tue"] = DayOfWeek.Tuesday, ["wed"] = DayOfWeek.Wednesday,
+        ["thu"] = DayOfWeek.Thursday, ["fri"] = DayOfWeek.Friday, ["sat"] = DayOfWeek.Saturday,
+        ["sunday"] = DayOfWeek.Sunday, ["monday"] = DayOfWeek.Monday, ["tuesday"] = DayOfWeek.Tuesday, ["wednesday"] = DayOfWeek.Wednesday,
+        ["thursday"] = DayOfWeek.Thursday, ["friday"] = DayOfWeek.Friday, ["saturday"] = DayOfWeek.Saturday
+    };
+
+    private static HashSet<DayOfWeek>? Days(JsonElement element, string where)
+    {
+        if (!element.TryGetProperty("Days", out var array) || array.ValueKind == JsonValueKind.Null)
+            return null;
+        if (array.ValueKind != JsonValueKind.Array)
+            throw new ConfigException($"\"Days\" must be a list in {where}");
+
+        var days = new HashSet<DayOfWeek>();
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || !DayNames.TryGetValue(item.GetString()!.Trim(), out var day))
+                throw new ConfigException($"\"Days\" takes mon, tue, wed, thu, fri, sat and sun in {where}");
+            days.Add(day);
+        }
+        return days.Count == 0 ? null : days;
     }
 
     /// <summary>

@@ -31,6 +31,11 @@ public sealed class ServiceOptions
     /// </summary>
     public int TickMilliseconds { get; set; } = 250;
 
+    /// <summary>
+    /// How often the health of the workers is measured.
+    /// </summary>
+    public int HealthSampleSeconds { get; set; } = 30;
+
     public string ResolveDataDirectory() =>
         string.IsNullOrWhiteSpace(DataDirectory) ? AppContext.BaseDirectory : Path.GetFullPath(DataDirectory, AppContext.BaseDirectory);
 }

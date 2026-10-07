@@ -7,7 +7,7 @@ namespace WorkerControl.Core;
 /// or stop answering, and stops the ones in excess. It does nothing on its own: whoever hosts
 /// it calls <see cref="Tick"/> a few times per second.
 /// </summary>
-public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider time)
+public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider time, IQueueMonitor? queues = null)
 {
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan KillPatience = TimeSpan.FromSeconds(5);
@@ -33,6 +33,7 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         public DateTimeOffset KeepAliveSentAt { get; set; }
         public DateTimeOffset NextKeepAliveAt { get; set; }
         public DateTimeOffset? LastAnswerAt { get; set; }
+        public TimeSpan? KeepAliveLatency { get; set; }
 
         /// <summary>Set while an unanswered keep-alive waits to be judged.</summary>
         public DateTimeOffset? VerdictAt { get; set; }
@@ -51,7 +52,18 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         public List<Worker> Workers { get; } = [];
         public DateTimeOffset LastSync { get; set; } = now;
         public bool Removed { get; set; }
-        public bool BoostActive { get; set; }
+
+        /// <summary>Extra workers the boost is asking for now.</summary>
+        public int BoostWorkers { get; set; }
+
+        /// <summary>Extra workers the queue is asking for, and when it last asked for that many.</summary>
+        public int ScaleWorkers { get; set; }
+        public DateTimeOffset ScaleDemandAt { get; set; }
+
+        /// <summary>Workers waiting to be replaced, one at a time.</summary>
+        public List<Worker> Recycling { get; } = [];
+        public RecycleConfig? RecycleSchedule { get; set; }
+        public DateTime NextRecycleAt { get; set; } = DateTime.MaxValue;
 
         public int QuickFailures { get; set; }
         public bool Unstable { get; set; }
@@ -172,19 +184,77 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
     {
         lock (_gate)
         {
-            var timeOfDay = time.GetLocalNow().TimeOfDay;
             return _groups
                 .Where(group => !group.Removed)
                 .Select(group => new GroupStatus(
                     group.Config,
-                    Desired(group, timeOfDay),
-                    group.BoostActive,
+                    Desired(group),
+                    group.BoostWorkers,
+                    group.ScaleWorkers,
+                    group.Recycling.Count > 0,
                     group.Unstable,
                     group.LastSync,
                     group.Workers
-                        .Select(worker => new WorkerStatus(worker.Process.Id, worker.State, worker.StartedAt, worker.LastAnswerAt, worker.Adopted))
+                        .Select(worker => new WorkerStatus(
+                            worker.Process.Id, worker.State, worker.StartedAt, worker.LastAnswerAt, worker.KeepAliveLatency,
+                            worker.Adopted, group.Recycling.Contains(worker)))
                         .ToList()))
                 .ToList();
+        }
+    }
+
+    /// <summary>
+    /// One measurement of every worker in service.
+    /// </summary>
+    public IReadOnlyList<HealthSample> SampleHealth()
+    {
+        lock (_gate)
+        {
+            var now = time.GetUtcNow();
+            return _groups
+                .SelectMany(group => group.Workers
+                    .Where(worker => worker.IsActive)
+                    .Select(worker => new HealthSample(
+                        group.Config.Name, worker.Process.Id, worker.State, now - worker.StartedAt, worker.Process.GetUsage(), worker.KeepAliveLatency)))
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// Replaces one worker: a new one is started and, once it is up, this one is asked to
+    /// stop. False when no worker in service has that process id.
+    /// </summary>
+    public bool RestartWorker(int processId)
+    {
+        lock (_gate)
+        {
+            foreach (var group in _groups)
+            {
+                var worker = group.Workers.Find(candidate => candidate.Process.Id == processId && candidate.IsActive);
+                if (worker is null)
+                    continue;
+                if (!group.Recycling.Contains(worker))
+                    group.Recycling.Add(worker);
+                Raise(EventKind.RecycleStarted, group, processId, "restart asked for this worker");
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Replaces every worker of a group, one at a time, without ever leaving it short. False
+    /// when there is no such group.
+    /// </summary>
+    public bool RestartGroup(string name)
+    {
+        lock (_gate)
+        {
+            var group = _groups.Find(candidate => candidate.Config.Name == name && !candidate.Removed);
+            if (group is null)
+                return false;
+            Recycle(group, "restart asked for the group");
+            return true;
         }
     }
 
@@ -215,9 +285,9 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
                 foreach (var worker in group.Workers.ToList())
                     Inspect(group, worker, now);
 
-            var timeOfDay = time.GetLocalNow().TimeOfDay;
+            var localNow = time.GetLocalNow().DateTime;
             foreach (var group in _groups)
-                Balance(group, now, timeOfDay);
+                Balance(group, now, localNow);
 
             foreach (var group in _groups.Where(group => group.Removed && group.Workers.Count == 0).ToList())
             {
@@ -227,8 +297,13 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         }
     }
 
-    private int Desired(Group group, TimeSpan timeOfDay) =>
-        _stopping || group.Removed ? 0 : group.Config.DesiredWorkers(timeOfDay);
+    /// <summary>
+    /// The base number, plus what the boost and the queue are asking for at the moment.
+    /// </summary>
+    private int Desired(Group group) =>
+        _stopping || group.Removed || !group.Config.Enabled
+            ? 0
+            : group.Config.TotalWorkers + group.BoostWorkers + group.ScaleWorkers;
 
     private void Inspect(Group group, Worker worker, DateTimeOffset now)
     {
@@ -321,6 +396,7 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         var now = time.GetUtcNow();
         worker.KeepAlivePending = false;
         worker.LastAnswerAt = now;
+        worker.KeepAliveLatency = now - sentAt;
         worker.NextKeepAliveAt = sentAt + group.Config.MonitoringRate;
         if (worker.State == WorkerState.Starting)
         {
@@ -370,6 +446,7 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
     private void Remove(Group group, Worker worker, DateTimeOffset now)
     {
         group.Workers.Remove(worker);
+        group.Recycling.Remove(worker);
         worker.Gone = true;
         Interlocked.Increment(ref _recordsVersion);
 
@@ -421,16 +498,14 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         }
     }
 
-    private void Balance(Group group, DateTimeOffset now, TimeSpan timeOfDay)
+    private void Balance(Group group, DateTimeOffset now, DateTime localNow)
     {
         var config = group.Config;
+        var running = !_stopping && !group.Removed && config.Enabled;
 
-        var boost = !_stopping && !group.Removed && config.Enabled && config.Boost.IsActive(timeOfDay);
-        if (boost != group.BoostActive)
-        {
-            group.BoostActive = boost;
-            Raise(boost ? EventKind.BoostStarted : EventKind.BoostEnded, group, null, $"{config.Boost.BoostWorkers} extra workers");
-        }
+        UpdateBoost(group, running, localNow);
+        UpdateScale(group, running, now);
+        UpdateRecycleSchedule(group, running, localNow);
 
         if (group.QuickFailures > 0 && group.Workers.Any(worker => worker.State == WorkerState.Up && now - worker.StartedAt >= config.CrashWindow))
         {
@@ -442,10 +517,16 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
             }
         }
 
-        var desired = Desired(group, timeOfDay);
+        var desired = Desired(group);
+        if (desired == 0)
+            group.Recycling.Clear();
+
+        // While workers wait to be replaced the group runs one above its number, so the new
+        // one is up before the old one leaves.
+        var wanted = desired + (group.Recycling.Count > 0 ? 1 : 0);
         var active = group.Workers.Where(worker => worker.IsActive).OrderBy(worker => worker.StartedAt).ToList();
 
-        for (var missing = desired - active.Count; missing > 0; missing--)
+        for (var missing = wanted - active.Count; missing > 0; missing--)
         {
             if (now < group.NextStartAt || !TakeStartSlot(now))
                 break;
@@ -453,15 +534,123 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         }
 
         // The oldest leave first.
-        foreach (var worker in active.Take(Math.Max(0, active.Count - desired)))
+        foreach (var worker in active.Take(Math.Max(0, active.Count - wanted)))
+            RequestStop(group, worker, now, "asked to stop");
+
+        ReplaceNext(group, desired, now);
+    }
+
+    private void UpdateBoost(Group group, bool running, DateTime localNow)
+    {
+        var boost = running ? group.Config.BoostWorkersAt(localNow) : 0;
+        if (boost == group.BoostWorkers)
+            return;
+
+        var before = group.BoostWorkers;
+        group.BoostWorkers = boost;
+        if (before == 0)
+            Raise(EventKind.BoostStarted, group, null, $"{boost} extra workers");
+        else if (boost == 0)
+            Raise(EventKind.BoostEnded, group, null, $"{before} extra workers");
+        else
+            Raise(EventKind.BoostStarted, group, null, $"{boost} extra workers instead of {before}");
+    }
+
+    /// <summary>
+    /// One extra worker for each so many messages waiting in the queue, up to the limit of the
+    /// group. Going up is immediate; going down waits, so the group does not swing with every
+    /// burst.
+    /// </summary>
+    private void UpdateScale(Group group, bool running, DateTimeOffset now)
+    {
+        var scaling = group.Config.QueueScaling;
+        if (!running || scaling is null || queues is null)
         {
-            worker.State = WorkerState.Stopping;
-            worker.Deadline = now + config.SafeStopTimeout;
-            worker.StopSent = broker.SendSafeStop(worker.Process.Id);
-            Interlocked.Increment(ref _recordsVersion);
-            Raise(EventKind.SafeStopRequested, group, worker.Process.Id,
-                worker.StopSent ? "asked to stop" : "asked to stop; the message could not be sent yet");
+            group.ScaleWorkers = 0;
+            return;
         }
+
+        // The broker cannot tell right now: what is running stays.
+        if (queues.PendingMessages(scaling.Queue) is not { } pending)
+            return;
+
+        var room = Math.Max(0, scaling.MaxWorkers - group.Config.TotalWorkers - group.BoostWorkers);
+        var target = Math.Min(room, pending / scaling.PendingPerWorker);
+        if (target >= group.ScaleWorkers)
+        {
+            group.ScaleDemandAt = now;
+            if (target == group.ScaleWorkers)
+                return;
+        }
+        else if (now - group.ScaleDemandAt < scaling.Cooldown)
+        {
+            return;
+        }
+
+        Raise(EventKind.ScaleChanged, group, null, $"{target} extra workers instead of {group.ScaleWorkers}; {pending} messages waiting in {scaling.Queue}");
+        group.ScaleWorkers = target;
+        group.ScaleDemandAt = now;
+    }
+
+    private void UpdateRecycleSchedule(Group group, bool running, DateTime localNow)
+    {
+        var schedule = group.Config.Recycle;
+        if (!ReferenceEquals(schedule, group.RecycleSchedule))
+        {
+            // New or changed: the first time is the next one from now, never one already past.
+            group.RecycleSchedule = schedule;
+            group.NextRecycleAt = schedule?.NextAfter(localNow) ?? DateTime.MaxValue;
+        }
+
+        if (schedule is null || localNow < group.NextRecycleAt)
+            return;
+
+        group.NextRecycleAt = schedule.NextAfter(localNow);
+        if (running)
+            Recycle(group, "scheduled");
+    }
+
+    private void Recycle(Group group, string why)
+    {
+        var added = 0;
+        foreach (var worker in group.Workers.Where(worker => worker.IsActive && !group.Recycling.Contains(worker)).OrderBy(worker => worker.StartedAt).ToList())
+        {
+            group.Recycling.Add(worker);
+            added++;
+        }
+        if (added > 0)
+            Raise(EventKind.RecycleStarted, group, null, $"{added} workers to replace ({why})");
+    }
+
+    /// <summary>
+    /// Once the worker started to take the place of an old one is up, the old one may go.
+    /// </summary>
+    private void ReplaceNext(Group group, int desired, DateTimeOffset now)
+    {
+        if (group.Recycling.Count == 0)
+            return;
+
+        var active = group.Workers.Where(worker => worker.IsActive).ToList();
+        var fresh = active.Where(worker => !group.Recycling.Contains(worker)).ToList();
+        if (active.Count <= desired || fresh.Count == 0 || fresh.Any(worker => worker.State != WorkerState.Up))
+            return;
+
+        var old = group.Recycling[0];
+        group.Recycling.RemoveAt(0);
+        RequestStop(group, old, now, "replaced by a new worker");
+        if (group.Recycling.Count == 0)
+            Raise(EventKind.RecycleFinished, group, null, "every worker was replaced");
+    }
+
+    private void RequestStop(Group group, Worker worker, DateTimeOffset now, string why)
+    {
+        worker.State = WorkerState.Stopping;
+        worker.Deadline = now + group.Config.SafeStopTimeout;
+        worker.StopSent = broker.SendSafeStop(worker.Process.Id);
+        group.Recycling.Remove(worker);
+        Interlocked.Increment(ref _recordsVersion);
+        Raise(EventKind.SafeStopRequested, group, worker.Process.Id,
+            worker.StopSent ? why : why + "; the message could not be sent yet");
     }
 
     /// <summary>

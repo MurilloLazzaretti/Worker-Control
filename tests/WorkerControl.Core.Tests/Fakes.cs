@@ -26,6 +26,15 @@ internal sealed class FakeProcess(int id, DateTimeOffset startTime) : IWorkerPro
         HasExited = true;
         ExitCode = code;
     }
+
+    public ProcessUsage? GetUsage() => HasExited ? null : new ProcessUsage(TimeSpan.FromSeconds(1), 64 * 1024 * 1024);
+}
+
+internal sealed class FakeQueues : IQueueMonitor
+{
+    public Dictionary<string, int?> Pending { get; } = [];
+
+    public int? PendingMessages(string queue) => Pending.TryGetValue(queue, out var pending) ? pending : 0;
 }
 
 internal sealed class FakeHost(FakeTimeProvider time) : IProcessHost
@@ -136,6 +145,7 @@ internal sealed class Bench
     public FakeTimeProvider Time { get; }
     public FakeHost Host { get; }
     public FakeBroker Broker { get; }
+    public FakeQueues Queues { get; } = new();
     public Supervisor Supervisor { get; }
     public List<SupervisorEvent> Events { get; } = [];
 
@@ -146,7 +156,7 @@ internal sealed class Bench
         Time.SetLocalTimeZone(TimeZoneInfo.Utc);
         Host = new FakeHost(Time);
         Broker = new FakeBroker(Time);
-        Supervisor = new Supervisor(Host, Broker, Time);
+        Supervisor = new Supervisor(Host, Broker, Time, Queues);
         Supervisor.Event += Events.Add;
     }
 

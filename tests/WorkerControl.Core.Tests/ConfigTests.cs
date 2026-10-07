@@ -107,6 +107,66 @@ public class ConfigTests
     }
 
     [Fact]
+    public void Reads_the_settings_that_make_the_number_of_workers_vary()
+    {
+        var config = ConfigReader.Parse("""
+            {
+              "ZapMQHost": "h", "ZapMQPort": 1, "EventRetentionDays": 7, "HealthRetentionHours": 6,
+              "WorkerGroups": [ {
+                "Name": "A", "ApplicationFullPath": "a", "TotalWorkers": 2,
+                "BoostWindows": [
+                  { "Workers": 3, "StartTime": "22:00:00", "EndTime": "02:00:00", "Days": ["mon", "Tue", "friday"] },
+                  { "Workers": 1, "StartTime": "08:00", "EndTime": "09:00" }
+                ],
+                "QueueScaling": { "Queue": "Orders", "PendingPerWorker": 20, "MaxWorkers": 8, "CooldownMs": 30000 },
+                "Recycle": { "Time": "03:00:00", "Days": ["sun"] }
+              } ]
+            }
+            """);
+
+        Assert.Equal(TimeSpan.FromDays(7), config.EventRetention);
+        Assert.Equal(TimeSpan.FromHours(6), config.HealthRetention);
+        var group = config.Groups.Single();
+        Assert.Equal(2, group.BoostWindows.Count);
+        Assert.Equal(3, group.BoostWindows[0].Workers);
+        Assert.Equal(new TimeSpan(22, 0, 0), group.BoostWindows[0].StartTime);
+        Assert.Equal([DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Friday], group.BoostWindows[0].Days!.Order());
+        Assert.Null(group.BoostWindows[1].Days);
+        Assert.Equal(new QueueScalingConfig { Queue = "Orders", PendingPerWorker = 20, MaxWorkers = 8, Cooldown = TimeSpan.FromSeconds(30) }, group.QueueScaling);
+        Assert.Equal(new TimeSpan(3, 0, 0), group.Recycle!.Time);
+        Assert.Equal([DayOfWeek.Sunday], group.Recycle.Days!);
+    }
+
+    [Theory]
+    [InlineData("\"BoostWindows\": {}", "\"BoostWindows\" must be a list")]
+    [InlineData("\"BoostWindows\": [ { \"StartTime\": \"08:00:00\" } ]", "\"Workers\" is required")]
+    [InlineData("\"BoostWindows\": [ { \"Workers\": 1, \"Days\": [\"segunda\"] } ]", "takes mon, tue")]
+    [InlineData("\"QueueScaling\": { \"MaxWorkers\": 3 }", "\"Queue\" is required")]
+    [InlineData("\"QueueScaling\": { \"Queue\": \"Q\" }", "\"MaxWorkers\" is required")]
+    [InlineData("\"Recycle\": { \"Days\": [\"sun\"] }", "\"Time\" is required")]
+    public void What_is_wrong_in_those_settings_is_refused_too(string setting, string expected)
+    {
+        var json = "{ \"ZapMQHost\": \"h\", \"ZapMQPort\": 1, \"WorkerGroups\": [ { \"Name\": \"A\", \"ApplicationFullPath\": \"a\", \"TotalWorkers\": 1, " + setting + " } ] }";
+
+        var error = Assert.Throws<ConfigException>(() => ConfigReader.Parse(json));
+
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public void The_next_recycle_is_never_one_already_past()
+    {
+        var sundays = new RecycleConfig { Time = new TimeSpan(3, 0, 0), Days = new HashSet<DayOfWeek> { DayOfWeek.Sunday } };
+        var daily = new RecycleConfig { Time = new TimeSpan(3, 0, 0) };
+        var wednesdayMorning = new DateTime(2026, 1, 7, 10, 0, 0);
+
+        Assert.Equal(new DateTime(2026, 1, 11, 3, 0, 0), sundays.NextAfter(wednesdayMorning));
+        Assert.Equal(new DateTime(2026, 1, 8, 3, 0, 0), daily.NextAfter(wednesdayMorning));
+        Assert.Equal(new DateTime(2026, 1, 7, 3, 0, 0), daily.NextAfter(new DateTime(2026, 1, 7, 2, 59, 59)));
+        Assert.Equal(new DateTime(2026, 1, 8, 3, 0, 0), daily.NextAfter(new DateTime(2026, 1, 7, 3, 0, 0)));
+    }
+
+    [Fact]
     public void Comments_and_a_comma_too_many_are_tolerated()
     {
         var config = ConfigReader.Parse("""

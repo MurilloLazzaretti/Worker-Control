@@ -130,5 +130,20 @@ internal sealed class ProcessHost : IProcessHost
             if (!HasExited)
                 _process.Kill(entireProcessTree: true);
         }
+
+        public ProcessUsage? GetUsage()
+        {
+            try
+            {
+                if (_process.HasExited)
+                    return null;
+                _process.Refresh();
+                return new ProcessUsage(_process.TotalProcessorTime, _process.WorkingSet64);
+            }
+            catch (Exception error) when (error is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                return null;
+            }
+        }
     }
 }

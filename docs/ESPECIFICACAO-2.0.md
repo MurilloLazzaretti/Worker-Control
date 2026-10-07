@@ -1,6 +1,6 @@
 # Worker Control 2.0 — Especificação
 
-Situação: aprovada em 2026-10-07. Etapa 1 implementada; ainda não instalada em ambiente algum.
+Situação: aprovada em 2026-10-07. Etapas 1 e 2 implementadas. A etapa 1 está em uso no ambiente de desenvolvimento desde 2026-10-07.
 Última revisão: 2026-10-07.
 
 Este documento especifica o serviço Worker Control 2.0, reescrito em .NET. Corresponde à fase 8 do [plano do ZapMQ 2.0](https://github.com/MurilloLazzaretti/ZapMQ/blob/main/docs/PLANO-2.0.md) e detalha a seção 11 dele. O painel web, onde o Worker Control ganha uma seção, é especificado junto com o ZapMQ 2.2.
@@ -153,7 +153,7 @@ O boost é avaliado continuamente; entra e sai no horário, sem depender da reca
 "QueueScaling": { "Queue": "Pedidos", "PendingPerWorker": 50, "MaxWorkers": 8, "CooldownMs": 120000 }
 ```
 
-O serviço consulta no ZapMQ quantas mensagens estão pendentes na fila e mantém workers a mais na proporção de um para cada `PendingPerWorker` pendentes, até `MaxWorkers` no total do grupo. Depois que a fila esvazia, os workers a mais só saem após `CooldownMs`, para não oscilar.
+O serviço consulta no ZapMQ, a cada 5 segundos, quantas mensagens estão pendentes na fila e mantém um worker a mais para cada `PendingPerWorker` pendentes completos (49 pendentes com `PendingPerWorker` de 50 não trazem nenhum), até `MaxWorkers` no total do grupo. Subir é imediato. Enquanto o ZapMQ não consegue informar a contagem, a quantidade fica como está. Depois que a fila esvazia, os workers a mais só saem após `CooldownMs`, para não oscilar.
 
 Depende do ZapMQ 2.x, que expõe a contagem; contra um servidor 1.x a chave é ignorada, com aviso no log.
 
@@ -231,14 +231,15 @@ Têm o campo `Command` em vez de `Message`, e `Version` com a versão do contrat
 | `GetConfig` / `SetConfig` | Lê e grava a configuração inteira, validada |
 | `SetGroupEnabled` | Habilita ou desabilita um grupo |
 | `SetGroupWorkers` | Muda `TotalWorkers` de um grupo |
-| `RestartWorker` | Safe stop de um worker; a reposição é automática |
+| `RestartWorker` | Substitui um worker: inicia o novo e, quando ele está no ar, faz o safe stop do antigo |
 | `RestartGroup` | Substitui os workers do grupo um a um, como na reciclagem |
 | `Events` | Histórico, com filtro por grupo, tipo e período |
 | `Health` | Medições de um worker ou grupo |
+| `DetachAndStop` | Para o serviço deixando os workers rodando (seção 12.2) |
 
 Resposta: `{"Ok": true, ...}` ou `{"Ok": false, "Error": {"Code": "...", "Message": "..."}}`.
 
-As alterações de estado também são publicadas na fila `WorkerControlEvents`, para o painel atualizar a tela sem consultar a cada instante. Sem ninguém consumindo, as mensagens vencem em segundos e não acumulam.
+A publicação das alterações de estado para o painel atualizar a tela sem consultar a cada instante fica para a etapa 4, junto com o painel. Publicada numa fila sem consumidor, cada alteração viraria uma mensagem morta no ZapMQ 2.1; a forma de entrega é definida com quem vai consumir.
 
 ## 12. Serviço
 
