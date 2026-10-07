@@ -533,15 +533,6 @@ object FrmMain: TFrmMain
           end
         end
       end
-      object Memo11: TMemo
-        Left = 218
-        Top = 55
-        Width = 489
-        Height = 598
-        Lines.Strings = (
-          'Memo11')
-        TabOrder = 2
-      end
     end
   end
   object MainMenu: TMainMenu

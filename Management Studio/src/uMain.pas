@@ -84,7 +84,6 @@ type
     Label8: TLabel;
     lblTotalWorkers: TLabel;
     GroupBox5: TGroupBox;
-    Memo11: TMemo;
     procedure FormCreate(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure Edit1Click(Sender: TObject);
@@ -399,7 +398,6 @@ var
   Worker : TWorker;
   RootNode : TTreeNode;
 begin
-  Memo11.Text := pMessage.ToJSON;
   TreeViewWorkersGroups.Enabled := True;
   TabSheetConfiguration.Enabled := True;
   RootNode := TreeViewWorkersGroups.Items.GetFirstNode;
@@ -413,7 +411,6 @@ begin
   begin
     WorkerGroup := WorkerGroups.Items[i] as TJSONObject;
     Workers := WorkerGroup.GetValue<TJSONArray>('Workers');
-    Memo11.Text := Memo11.Text + WorkerGroup.ToJSON;
     CheckSynchronizePending(WorkerGroup.GetValue<string>('Name'),
      StrToDateTime(WorkerGroup.GetValue<string>('LastSyncConfig')));
     ClearWorkersNode(WorkerGroup.GetValue<string>('Name'));
