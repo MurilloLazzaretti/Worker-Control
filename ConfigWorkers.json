@@ -5,18 +5,17 @@
     "WorkerGroups" : [
         {
             "Enabled" : false,
-            "Name" : "Teste",
-            "ApplicationFullPath" : "C:\\Temp\\bossteste\\Win32\\Debug\\SimpleSample.exe",
+            "Name" : "Sample",
+            "ApplicationFullPath" : "C:\\Apps\\Sample\\Sample.exe",
             "TotalWorkers" : 2,
             "MonitoringRate": 30000,
-            "TimeoutKeepAlive" : 125000,
-            "Debug" : true,
+            "TimeoutKeepAlive" : 15000,
             "Boost" : {
                 "Enabled" : false,
                 "BoostWorkers" : 3,
                 "StartTime" : "12:00:00",
-                "EndTime" : "12:19:00"    
-            } 
+                "EndTime" : "12:19:00"
+            }
         }
     ]
 }

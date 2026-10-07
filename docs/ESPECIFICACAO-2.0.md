@@ -1,6 +1,6 @@
 # Worker Control 2.0 — Especificação
 
-Situação: proposta, aguardando aprovação das decisões da seção 14.
+Situação: aprovada em 2026-10-07. Etapa 1 implementada; ainda não instalada em ambiente algum.
 Última revisão: 2026-10-07.
 
 Este documento especifica o serviço Worker Control 2.0, reescrito em .NET. Corresponde à fase 8 do [plano do ZapMQ 2.0](https://github.com/MurilloLazzaretti/ZapMQ/blob/main/docs/PLANO-2.0.md) e detalha a seção 11 dele. O painel web, onde o Worker Control ganha uma seção, é especificado junto com o ZapMQ 2.2.
@@ -87,6 +87,8 @@ Dois problemas da 1.x aparecem quando muitos workers iniciam juntos: a máquina 
 - **Subida escalonada.** O serviço inicia no máximo `StartBatchSize` workers por vez, em todos os grupos somados, com `StartBatchIntervalMs` entre um lote e o seguinte. Padrão: 4 workers a cada 2 segundos.
 - **Carência de subida.** Um worker em estado *iniciando* tem `StartupGraceMs` para responder ao primeiro keep-alive, independentemente do `TimeoutKeepAlive`. Padrão: 60 segundos. Keep-alive vencido dentro da carência é reenviado, não conta como travamento.
 
+Um keep-alive que vence para um worker *no ar* não o encerra na hora: o veredito sai 5 segundos depois, tempo para o serviço perceber se foi o ZapMQ que falhou (seção 7.3).
+
 Com isso o `TimeoutKeepAlive` volta a medir só o que deveria: quanto tempo um worker já no ar pode ficar sem responder.
 
 ## 7. Supervisão
@@ -105,7 +107,7 @@ O serviço mantém o processo aberto e é avisado quando ele sai. A reposição 
 
 Enviado a cada `MonitoringRate` para cada worker *no ar* ou *iniciando*. Vencido para um worker *no ar*: o processo é encerrado à força e reposto.
 
-**Sem conexão com o ZapMQ, keep-alive não conta.** Se o serviço não consegue publicar, ou perdeu a conexão desde o envio, o vencimento é ignorado e nenhum worker é encerrado por isso. A supervisão por queda de processo (7.2) continua funcionando sem o ZapMQ.
+**Sem o ZapMQ, keep-alive não conta.** O serviço mantém uma mensagem própria circulando pelo ZapMQ, de ida e volta, praticamente o tempo todo. Um keep-alive sem resposta só é atribuído ao worker se, desde que foi enviado, essa mensagem nunca deixou de voltar. Vale para o ZapMQ parado, reiniciado ou inalcançável, e em qualquer dos dois protocolos. A supervisão por queda de processo (7.2) continua funcionando sem o ZapMQ.
 
 ### 7.4 Safe stop
 
@@ -256,7 +258,15 @@ Para trocar o executável do próprio Worker Control sem derrubar as aplicaçõe
 
 ### 12.3 Conexão com o ZapMQ
 
-Pelo wrapper .NET 2.0. Uma conexão para o serviço inteiro, em vez de uma por grupo.
+Pelo wrapper .NET 2.0. Três conexões para o serviço inteiro (envio, administração e a mensagem de verificação da seção 7.3), em vez de uma por grupo.
+
+### 12.4 Nome do serviço
+
+`WorkerControlService`, com o nome de exibição `WorkerControl`: os mesmos da 1.x, que o Management Studio 1.x procura para mostrar o estado e para parar e iniciar o serviço. Onde a 1.x já está instalada, a troca é apontar o serviço existente para o executável novo.
+
+### 12.5 Processos filhos
+
+Encerrar um worker à força encerra também os processos que ele iniciou. Na 1.x eles ficavam órfãos.
 
 ## 13. Etapas
 
@@ -269,7 +279,7 @@ Pelo wrapper .NET 2.0. Uma conexão para o serviço inteiro, em vez de uma por g
 
 Nenhuma etapa vai a outro ambiente antes de as quatro estarem funcionando no de desenvolvimento.
 
-## 14. Decisões a tomar
+## 14. Decisões tomadas
 
 1. **Ordem das etapas.** Serviço primeiro, com o Management Studio 1.x servindo de tela até o painel existir (etapa 1), em vez de serviço e painel juntos.
 2. **Parar o serviço continua parando os workers** (seção 12.2), com a parada sem workers como alternativa explícita.

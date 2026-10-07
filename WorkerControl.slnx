@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WorkerControl.Core/WorkerControl.Core.csproj" />
+    <Project Path="src/WorkerControl.Service/WorkerControl.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TestWorker/TestWorker.csproj" />
+    <Project Path="tests/WorkerControl.Core.Tests/WorkerControl.Core.Tests.csproj" />
+    <Project Path="tests/WorkerControl.Service.Tests/WorkerControl.Service.Tests.csproj" />
+  </Folder>
+  <Project Path="../ZapMQ/src/ZapMQ.Core/ZapMQ.Core.csproj" />
+  <Project Path="../ZapMQ/src/ZapMQ.Server/ZapMQ.Server.csproj" />
+</Solution>

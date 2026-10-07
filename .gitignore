@@ -67,3 +67,14 @@ __recovery/
 
 # Boss dependency manager vendor folder https://github.com/HashLoad/boss
 modules/
+
+# .NET build output
+bin/
+obj/
+publish/
+
+# macOS
+.DS_Store
+
+# The ZapMQ wrapper the service is built against
+!lib/*.dll

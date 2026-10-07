@@ -1,61 +1,78 @@
 ## 🇧🇷  Worker Control - Microservices 🇧🇷
- <b>Worker Control</b> is a windows service developed to monitore your microservices. You control the number of applications you need, check a possible crash and make a balance with a boost in determinated time of your choice.
 
-## 🚧 Version 2.0 (.NET)
+<b>Worker Control</b> is a Windows service that keeps your applications running. You say how many instances of each one you need; it starts them, replaces the ones that go away or stop answering, and adds instances during the hours you choose.
 
-Worker Control is being rewritten in .NET and this branch (`main`) will become version 2.0.
+## 🧭 Versions
 
-The Delphi version (1.x) stays available and keeps working:
+| Version | Where | Status |
+| ------- | ----- | ------ |
+| 2.x (.NET) | this branch (`main`) | in development |
+| 1.x (Delphi) | branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1), last tag [`v1.1.1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.1) | maintenance |
 
-- Source code: branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1)
-- Last Delphi tag: [`v1.1.1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.1)
+Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). So far the first step is done: the service itself. Management Studio 1.x keeps working against it until the web panel exists.
 
-## ⚠️ Warning
+## 🧬 Resources
 
-Worker Control is in a <b>Beta</b> version for now, if you have any issue, please tell us. 
+🚑 _Crash detection_
+
+An instance that goes away is replaced right then. An instance that stops answering its keep-alive is ended and replaced.
+
+🔚 _Safe stop_
+
+To take an instance out, the service asks it to stop and waits for it to finish its work and leave. One that does not leave in time is ended.
+
+🪜 _Staggered start_
+
+Instances are started a few at a time, and a new instance has a grace period to answer for the first time. A machine starting everything at once is no longer too busy for any of them to get ready.
+
+🧲 _Nothing duplicated_
+
+The service remembers the instances it is running. Started again, it finds them instead of starting others.
+
+🛡 _A broker failure ends nobody_
+
+While ZapMQ is unreachable, an unanswered keep-alive is not held against any instance. Instances that go away are still replaced.
+
+🌀 _No restart loop_
+
+A group whose instances keep failing right after starting waits longer and longer between attempts, and says so in the log.
+
+🚀 _Boost_
+
+A daily window in which a group runs extra instances. It may cross midnight.
 
 ## 💉 Dependency
 
-Worker Control needs a [`ZapMQ server`](https://github.com/MurilloLazzaretti/ZapMQ) to work: it is through ZapMQ that it talks to the applications it controls. Install ZapMQ first.
+Worker Control needs a [`ZapMQ server`](https://github.com/MurilloLazzaretti/ZapMQ): it is through ZapMQ that it talks to the applications it controls. Install ZapMQ first.
+
+## 🌱 Wrappers
+
+For an application to work with Worker Control, it uses the wrapper:
+
+| _Language_ | _Status_ | _Link_ |
+| ---------- | -------- | ------ |
+| Delphi     | Done     | [`Delphi Wrapper`](https://github.com/MurilloLazzaretti/worker-delphi-wrapper) |
+| .NET C#    | Done     | [`.NET Wrapper C#`](https://github.com/MurilloLazzaretti/Worker-.NET-Wrapper) |
+
+## 📋 Requirements
+
+- Windows Server 2016 or later, or Windows 10 or later, 64-bit.
+- A ZapMQ server the machine can reach.
+- To build: the [.NET 10 SDK](https://dotnet.microsoft.com/download). The machine that runs the service needs nothing installed: the executable carries the runtime.
 
 ## 🔨 Build
 
-Open `WorkerControl.dproj` in Delphi and build it for Win64. The [`ZapMQ Delphi Wrapper`](https://github.com/MurilloLazzaretti/ZapMQ-Delphi-Wrapper) it depends on is fetched with [`Boss`](https://github.com/HashLoad/boss):
+From the repository root:
 
 ```
-boss install
+dotnet publish src/WorkerControl.Service -c Release -r win-x64 -o publish/win-x64
 ```
 
-`Management Studio\ManagementStudio.dproj` is the desktop application used to edit the configuration and follow the workers. Build it the same way.
-
-## ⚙️ Installation
-
-Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.
-
-1. Copy `WorkerControl.exe`, `ConfigWorkers.json` and, if you use it, `ManagementStudio.exe` to `C:\WorkerControl`. The three must stay in the same folder: the service reads `ConfigWorkers.json` from the folder of its executable, and Management Studio edits that same file.
-
-2. Edit `ConfigWorkers.json` as described below.
-
-3. Register the service and start it:
-
-```powershell
-& C:\WorkerControl\WorkerControl.exe /install
-Start-Service WorkerControlService
-```
-
-The service is registered as `WorkerControlService`, shown as "WorkerControl" in the services list. It starts with Windows and runs under the Local System account, and so does every application it starts.
-
-4. Check that it is running:
-
-```powershell
-Get-Service WorkerControlService
-```
-
-Within the time set in `MonitoringRate`, the applications of the enabled groups appear in the Task Manager.
+The folder `publish/win-x64` now has `WorkerControl.exe`.
 
 ## ⚡️ Configuration
 
-The settings are in `ConfigWorkers.json`, in the same folder as `WorkerControl.exe`.
+The settings are in `ConfigWorkers.json`, in the same folder as `WorkerControl.exe`. A sample is in the repository root.
 
 ```json
 {
@@ -64,79 +81,114 @@ The settings are in `ConfigWorkers.json`, in the same folder as `WorkerControl.e
     "RateLoadConfig" : 180000,
     "WorkerGroups" : [
         {
-            "Enabled" : false,
-            "Name" : "My App",
-            "ApplicationFullPath" : "...",
+            "Enabled" : true,
+            "Name" : "Orders",
+            "ApplicationFullPath" : "C:\\Apps\\Orders\\Orders.exe",
             "TotalWorkers" : 2,
             "MonitoringRate": 30000,
-            "TimeoutKeepAlive" : 125000,
-            "Debug" : true,
+            "TimeoutKeepAlive" : 15000,
             "Boost" : {
                 "Enabled" : false,
                 "BoostWorkers" : 3,
                 "StartTime" : "12:00:00",
-                "EndTime" : "12:30:00"    
-            } 
-        },
-        {
-            "Enabled" : false,
-            "Name" : "My App 2",
-            "ApplicationFullPath" : "...",
-            "TotalWorkers" : 2,
-            "MonitoringRate": 30000,
-            "TimeoutKeepAlive" : 125000,
-            "Debug" : true,
-            "Boost" : {
-                "Enabled" : false,
-                "BoostWorkers" : 3,
-                "StartTime" : "12:00:00",
-                "EndTime" : "12:30:00"    
-            } 
+                "EndTime" : "12:19:00"
+            }
         }
     ]
 }
 ```
-✏ _Tips_
 
-When you change the ConfigWorkers.json you dont need to restart the service, just wait to it notice the change.
+The file is read again the moment it changes. A file with anything wrong in it is refused as a whole: the settings in use stay, and the log says what was wrong.
 
-## 🍬 JSON Properties
+🍬 _Settings of 1.x_
 
-| _Property_                        | _Value_         | _Description_                                 |  
-| --------------------------------- | --------------- | --------------------------------------------- |
-|  ZapMQHost                        | String          | Ip of ZapMQ Service                           |
-|  ZapMQPort                        | Integer         | Port of ZapMQ Service                         |
-|  RateLoadConfig                   | Integer         | Freq to reaload config file                   |
-|  WorkerGroups.Enabled             | Boolean         | Enable / Disable WorkerGroup                  |
-|  WorkerGroups.Name                | String          | Name of your WorkerGroup                      |
-|  WorkerGroups.ApplicationFullPath | String          | Full path to your .exe file                   |
-|  WorkerGroups.TotalWorkers        | Integer         | Number of instances to open                   |
-|  WorkerGroups.MonitoringRate      | Integer         | Miliseconds to check crashed instances        |
-|  WorkerGroups.TimeoutKeepAlive    | Integer         | Miliseconds to each instances have to answer  |
-|  WorkerGroups.Debug               | Boolean         | if true, show your app under your section     |
-|  WorkerGroups.Boost.Enabled       | Boolean         | Enable / Disable Boost                        |
-|  WorkerGroups.Boost.BoostWorkers  | Boolean         | How many instances will open when boost start |
-|  WorkerGroups.Boost.StartTime     | String          | Time to Start the boost                       |
-|  WorkerGroups.Boost.EndTime       | String          | Time to End the boost                         |
+| _Property_ | _Value_ | _Description_ |
+| ---------- | ------- | ------------- |
+| `ZapMQHost` | Text | Address of the ZapMQ server. Changing it takes a restart of the service |
+| `ZapMQPort` | Number | Port of the ZapMQ server. Changing it takes a restart of the service |
+| `RateLoadConfig` | Milliseconds | How often the file is read even if nothing announced a change |
+| `WorkerGroups.Enabled` | true/false | A disabled group has its instances stopped |
+| `WorkerGroups.Name` | Text | Name of the group; no two groups may share one |
+| `WorkerGroups.ApplicationFullPath` | Text | Full path of the executable |
+| `WorkerGroups.TotalWorkers` | Number | Instances to keep running |
+| `WorkerGroups.MonitoringRate` | Milliseconds | Interval between keep-alives |
+| `WorkerGroups.TimeoutKeepAlive` | Milliseconds | How long an instance already up may take to answer a keep-alive |
+| `WorkerGroups.Boost.Enabled` | true/false | Turns the boost window on |
+| `WorkerGroups.Boost.BoostWorkers` | Number | Extra instances during the window |
+| `WorkerGroups.Boost.StartTime` | `hh:mm:ss` | Start of the window |
+| `WorkerGroups.Boost.EndTime` | `hh:mm:ss` | End of the window. Earlier than the start means the window crosses midnight |
 
-## 🌱 Wrappers
+🆕 _New in 2.0_
 
-To your application work with Worker Control, it needs to be implemented the wrapper
+All optional. The ones marked "root or group" may be given once at the root, for every group, and again inside a group, for that one only.
 
-| _Language_ | _Status_        | _Link_            | 
-| ---------- | --------------- | ----------------- |
-|  Delphi    | Done            | [`Delphi Wrapper`](https://github.com/MurilloLazzaretti/worker-delphi-wrapper)|
-|  .NET C#   | Done            | [`.NET Wrapper C#`](https://github.com/MurilloLazzaretti/Worker-.NET-Wrapper)|
+| _Property_ | _Where_ | _Default_ | _Description_ |
+| ---------- | ------- | --------- | ------------- |
+| `StartBatchSize` | root | 4 | Instances started per batch, all groups together |
+| `StartBatchIntervalMs` | root | 2000 | Interval between batches |
+| `StartupGraceMs` | root or group | 60000 | How long a new instance has to answer its first keep-alive |
+| `SafeStopTimeoutMs` | root or group | 30000 | How long an instance asked to stop has to leave before it is ended |
+| `CrashWindowMs` | root or group | 60000 | An instance that fails sooner than this after starting counts as a quick failure |
+| `CrashLimit` | root or group | 3 | Quick failures in a row before the group starts waiting between attempts |
+| `Arguments` | group | empty | Arguments passed to the executable |
+| `WorkingDirectory` | group | folder of the executable | Working folder of the instance |
 
-## 🧬 Resources
+`TimeoutKeepAlive` no longer has to cover the time an application takes to start; that is what `StartupGraceMs` is for.
 
-🚑  _Crashes Detect_
+Management Studio 1.x writes the file with the settings it knows. Saving from it drops the new ones.
 
-If any instace controled by the service may crash, it will notice by him and will close the app and open another instace
+## ⚙️ Installation
 
-🔚 _Safe Stop_
+Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.
 
-When Worker Control needs to close safelly an app, it will send a message to the app and when the app finish all your tasks, it will be closed.
+1. Copy `WorkerControl.exe` and your `ConfigWorkers.json` to `C:\WorkerControl`. If you use Management Studio, it goes in the same folder: it edits that same file.
+
+2. Register the service and start it:
+
+```powershell
+sc.exe create WorkerControlService binPath= "C:\WorkerControl\WorkerControl.exe" DisplayName= "WorkerControl" start= auto depend= ZapMQ
+sc.exe description WorkerControlService "Keeps the configured applications running"
+Start-Service WorkerControlService
+```
+
+Leave `depend= ZapMQ` out when ZapMQ runs on another machine, and replace `ZapMQ` with the name its service has on yours.
+
+The service runs under the Local System account, and so does every application it starts. The names above are the ones 1.x used, which Management Studio 1.x looks for.
+
+3. Check that it is running:
+
+```powershell
+Get-Service WorkerControlService
+Get-Content C:\WorkerControl\logs\workercontrol-*.log -Tail 20
+```
+
+The applications of the enabled groups appear in the Task Manager within seconds.
+
+## 🔁 Coming from 1.x
+
+The file `ConfigWorkers.json` is used as it is. With the 1.x service installed under the same name, point it at the new executable instead of creating another:
+
+```powershell
+Stop-Service WorkerControlService -Force      # stops the applications too
+Copy-Item "C:\Program Files (x86)\WorkerControl\ConfigWorkers.json" C:\WorkerControl\
+sc.exe config WorkerControlService binPath= "C:\WorkerControl\WorkerControl.exe"
+Start-Service WorkerControlService
+```
+
+To go back, stop the service and run `sc.exe config` again with the path of the 1.x executable.
+
+What is different for the applications: an instance now starts in the folder of its own executable, where 1.x started it in the folder of the service. An application that depended on that needs `WorkingDirectory`.
+
+## 📜 Log
+
+One file per day in `logs`, next to the executable. Every start, exit, replacement and stop is there, with the group and the process id:
+
+```
+WorkerStarted [Orders] pid 4812: C:\Apps\Orders\Orders.exe
+WorkerUp [Orders] pid 4812: answered after 1.4 s
+WorkerCrashed [Orders] pid 4812: exit code 1, after 37 min
+WorkerHung [Orders] pid 5120: no answer to the keep-alive in 15 s
+```
 
 ## ⬆️ Update
 
@@ -148,12 +200,31 @@ Copy-Item .\WorkerControl.exe C:\WorkerControl\WorkerControl.exe -Force
 Start-Service WorkerControlService
 ```
 
-Stopping the service asks every application it controls to stop.
+Stopping the service asks every application it controls to stop, and waits for them.
+
+To update Worker Control itself **without stopping the applications**, create an empty file named `detach.flag` in its folder before stopping the service. It then leaves them running and finds them again when it starts:
+
+```powershell
+New-Item C:\WorkerControl\detach.flag -ItemType File
+Stop-Service WorkerControlService -Force
+Copy-Item .\WorkerControl.exe C:\WorkerControl\WorkerControl.exe -Force
+Start-Service WorkerControlService
+```
 
 ## 🔥 Uninstall
 
 ```powershell
 Stop-Service WorkerControlService -Force
-& C:\WorkerControl\WorkerControl.exe /uninstall
+sc.exe delete WorkerControlService
 Remove-Item C:\WorkerControl -Recurse
 ```
+
+## 🧪 Development
+
+```
+dotnet test
+```
+
+`tests/WorkerControl.Core.Tests` exercises the supervisor with simulated processes, broker and clock. `tests/WorkerControl.Service.Tests` runs the service with real processes (`tests/TestWorker`, a worker that misbehaves on request) and a real ZapMQ server, built from the [`ZapMQ`](https://github.com/MurilloLazzaretti/ZapMQ) repository. They expect it cloned next to this one; to use another place, add `-p:ZapMQServerProject=<path to ZapMQ.Server.csproj>`.
+
+`lib/ZapMQWrapper.dll` is the ZapMQ .NET wrapper 2.0, built from [its repository](https://github.com/MurilloLazzaretti/ZapMQ-.NET-Wrapper).
