@@ -8,7 +8,7 @@ Worker Control is being rewritten in .NET and this branch (`main`) will become v
 The Delphi version (1.x) stays available and keeps working:
 
 - Source code: branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1)
-- Last Delphi tag: [`v1.1.0`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.0)
+- Last Delphi tag: [`v1.1.1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.1)
 
 ## ⚠️ Warning
 
