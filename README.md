@@ -1,6 +1,15 @@
 ## 🇧🇷  Worker Control - Microservices 🇧🇷
  <b>Worker Control</b> is a windows service developed to monitore your microservices. You control the number of applications you need, check a possible crash and make a balance with a boost in determinated time of your choice.
 
+## 🚧 Version 2.0 (.NET)
+
+Worker Control is being rewritten in .NET and this branch (`main`) will become version 2.0.
+
+The Delphi version (1.x) stays available and keeps working:
+
+- Source code: branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1)
+- Last Delphi tag: [`v1.1.0`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.0)
+
 ## ⚠️ Warning
 
 Worker Control is in a <b>Beta</b> version for now, if you have any issue, please tell us. 
