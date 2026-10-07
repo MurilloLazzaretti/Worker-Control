@@ -18,11 +18,20 @@ type
     property BoostWorkers : integer read FBoostWorkers write SetBoostWorkers;
     property StartTime : TTime read FStartTime write SetStartTime;
     property EndTime : TTime read FEndTime write SetEndTime;
+    constructor Create; overload;
   end;
 
 implementation
 
 { TBoostWorkerGroup }
+
+constructor TBoostWorkerGroup.Create;
+begin
+  FEnabled := False;
+  FBoostWorkers := 0;
+  FStartTime := 0;
+  FEndTime := 0;
+end;
 
 procedure TBoostWorkerGroup.SetBoostWorkers(const Value: integer);
 begin
@@ -45,3 +54,5 @@ begin
 end;
 
 end.
+//
+

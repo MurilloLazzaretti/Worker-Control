@@ -34,6 +34,7 @@ object FrmMain: TFrmMain
     ReadOnly = True
     TabOrder = 0
     OnChange = TreeViewWorkersGroupsChange
+    ExplicitTop = 0
   end
   object StatusBar1: TStatusBar
     Left = 0
@@ -173,7 +174,7 @@ object FrmMain: TFrmMain
               Font.Name = 'Segoe UI'
               Font.Style = []
               TabOrder = 1
-              Time = 44265.610612812500000000
+              Time = 44265.610612812490000000
               TimeFormat = 'hh:mm'
             end
             object txtEndTimeBoost: TTimePicker
@@ -185,7 +186,7 @@ object FrmMain: TFrmMain
               Font.Name = 'Segoe UI'
               Font.Style = []
               TabOrder = 2
-              Time = 44265.610612812500000000
+              Time = 44265.610612812490000000
               TimeFormat = 'hh:mm'
             end
             object txtBoostWorkers: TSpinEdit
@@ -531,6 +532,15 @@ object FrmMain: TFrmMain
             end
           end
         end
+      end
+      object Memo11: TMemo
+        Left = 218
+        Top = 55
+        Width = 489
+        Height = 598
+        Lines.Strings = (
+          'Memo11')
+        TabOrder = 2
       end
     end
   end

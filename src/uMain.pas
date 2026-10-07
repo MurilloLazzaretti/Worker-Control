@@ -10,10 +10,11 @@ type
   TWorkerControlService = class(TService)
     procedure ServiceStart(Sender: TService; var Started: Boolean);
     procedure ServiceStop(Sender: TService; var Stopped: Boolean);
+    procedure ServiceDestroy(Sender: TObject);
+    procedure ServiceCreate(Sender: TObject);
   private
-    { Private declarations }
+    FManager : TManager;
   public
-    Manager : TManager;
     function GetServiceController: TServiceController; override;
   end;
 
@@ -34,20 +35,44 @@ begin
   Result := ServiceController;
 end;
 
+procedure TWorkerControlService.ServiceCreate(Sender: TObject);
+begin
+  FManager := TManager.Create;
+end;
+
+procedure TWorkerControlService.ServiceDestroy(Sender: TObject);
+begin
+  FreeAndNil(FManager);
+end;
+
 procedure TWorkerControlService.ServiceStart(Sender: TService;
   var Started: Boolean);
 begin
-  Manager := TManager.Create;
-  Manager.Start;
-  Started := True;
+  try
+    FManager.Start;
+    Started := True;
+  except
+    on E: Exception do
+    begin
+      OutputDebugString(PChar('Erro em ServiceStart: ' + E.Message));
+      Started := False;
+    end;
+  end;
 end;
 
 procedure TWorkerControlService.ServiceStop(Sender: TService;
   var Stopped: Boolean);
 begin
-  Manager.Stop;
-  Manager.Free;
-  Stopped := True;
+  try
+    FManager.Stop;
+    Stopped := True;
+  except
+    on E: Exception do
+    begin
+      OutputDebugString(PChar('Erro em ServiceStop: ' + E.Message));
+      Stopped := False;
+    end;
+  end;
 end;
 
 end.
