@@ -4,7 +4,7 @@ interface
 
 uses
   System.Classes, Generics.Collections, WorkerControl.WorkerGroup, SyncObjs,
-  ZapMQ.Wrapper, ZapMQ.Message.JSON, JSON, IniFiles;
+  ZapMQ.Wrapper, ZapMQ.Message.JSON, JSON;
 
 type
   TManager = class(TThread)
@@ -23,8 +23,6 @@ type
   protected
     procedure Execute; override;
   public
-    procedure GravarArqLog(pTexto: String);
-    function LoadIniTag(const pIniFile, pIniBloc, pIniTag : string) : string;
     property WorkerGroups : TObjectList<TWorkerGroup> read FWorkerGroups write SetWorkerGroups;
     procedure Stop;
     constructor Create; overload;
@@ -44,12 +42,9 @@ var
   Json : TJSONObject;
 begin
   Result := nil;
-  GravarArqLog('CHEGOU');
   if pMessage.Body.GetValue<string>('Message') = 'CurrentWorkers' then
   begin
-    GravarArqLog('CURRENT WORKERS');
     Result := TStatusMessage.ToJSON(WorkerGroups);
-    GravarArqLog('Result : ' + TStatusMessage.ToJSON(WorkerGroups).ToJSON);
   end
   else if pMessage.Body.GetValue<string>('Message') = 'ReloadConfig' then
   begin
@@ -73,14 +68,12 @@ begin
   if Assigned(FZapMQWrapper) then
     FZapMQWrapper.Free;
   FEvent.Free;
-  GravarArqLog('DESCEU');
   inherited;
 end;
 
 procedure TManager.Execute;
 begin
   inherited;
-  GravarArqLog('SUBIU');
   while not Terminated do
   begin
     LoadConfig;
@@ -103,64 +96,12 @@ begin
   end;
 end;
 
-procedure TManager.GravarArqLog(pTexto: String);
-var
-  lArqLog: String;
-  lPathModulo: String;
-  lExiste: Boolean;
-  lTextFile: TextFile;
-  lTry: Integer;
-  lPathLog : string;
-begin
-  lPathLog := LoadIniTag('OjiTec.ini', 'GLOBAL', 'PATHLOG');
-  lPathModulo := lPathLog + 'WorkerControl';
-  if not DirectoryExists(lPathModulo) then CreateDir(lPathModulo);
-  lPathModulo := lPathModulo +'\';
-
-  lArqLog := lPathModulo + FormatDateTime('dd-mm-yy', Now) + '.LOG';
-  lExiste := FileExists( lArqlog ) ;
-
-  Assignfile(lTextFile, lArqlog);
-  try
-    {$I-}
-    if lExiste then
-    begin
-      lTry := 0;
-      Append(lTextFile);
-      while (IOResult <> 0) and (lTry < 5) do
-      begin
-        Sleep(1000);
-        Append(lTextFile);
-        lTry := lTry + 1;
-      end;
-    end
-    else
-    begin
-      ReWrite(lTextFile);
-    end;
-    {$I+}
-    if IOResult = 0 then
-    begin
-      try
-        Writeln(lTextFile, FormatDateTime('dd-mm-yyyy hh:mm:ss', Now) );
-        Writeln(lTextFile, pTexto );
-        Writeln(lTextFile, '--------------------------------------------------------------------------------------------');
-      finally
-        Flush(lTextFile);
-      end;
-    end;
-  finally
-    CloseFile(lTextFile);
-  end;
-end;
-
 procedure TManager.LoadConfig;
 var
   Config : TConfig;
   WorkerGroupConfig : TWorkerGroupConfig;
   WorkerGroup : TWorkerGroup;
 begin
-  GravarArqLog('LOAD CONFIG');
   Config := TConfig.FromFile('ConfigWorkers.json');
   try
     FZapMQHost := Config.ZapMQHost;
@@ -207,23 +148,6 @@ begin
     end;
   finally
     Config.Free;
-  end;
-end;
-
-function TManager.LoadIniTag(const pIniFile, pIniBloc, pIniTag: string): string;
-var
-  IniFile: TInifile;
-  PathApp: String;
-begin
-  PathApp := ExtractFilePath(Application.ExeName);
-  if FileExists(PathApp + pIniFile) then
-  begin
-    IniFile := TIniFile.Create(PathApp + pIniFile);
-    try
-      Result := IniFile.ReadString(pIniBloc, pIniTag, '');
-    finally
-      IniFile.Free;
-    end;
   end;
 end;
 
