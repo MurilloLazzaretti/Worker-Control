@@ -14,18 +14,48 @@ The Delphi version (1.x) stays available and keeps working:
 
 Worker Control is in a <b>Beta</b> version for now, if you have any issue, please tell us. 
 
-## ⚙️ Installation
-
-Download and run WorkerControl - Installer.exe, specify the folder to install and next, next, next...
-When installation is done, in your services list will be Worker Control service installed and already running (if there was no problem, of course)
-
 ## 💉 Dependency
 
-Worker Control needs [`ZapMQ server`](https://github.com/MurilloLazzaretti/ZapMQ) to work. Please, before install Worker Control install ZapMQ server.
+Worker Control needs a [`ZapMQ server`](https://github.com/MurilloLazzaretti/ZapMQ) to work: it is through ZapMQ that it talks to the applications it controls. Install ZapMQ first.
+
+## 🔨 Build
+
+Open `WorkerControl.dproj` in Delphi and build it for Win64. The [`ZapMQ Delphi Wrapper`](https://github.com/MurilloLazzaretti/ZapMQ-Delphi-Wrapper) it depends on is fetched with [`Boss`](https://github.com/HashLoad/boss):
+
+```
+boss install
+```
+
+`Management Studio\ManagementStudio.dproj` is the desktop application used to edit the configuration and follow the workers. Build it the same way.
+
+## ⚙️ Installation
+
+Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.
+
+1. Copy `WorkerControl.exe`, `ConfigWorkers.json` and, if you use it, `ManagementStudio.exe` to `C:\WorkerControl`. The three must stay in the same folder: the service reads `ConfigWorkers.json` from the folder of its executable, and Management Studio edits that same file.
+
+2. Edit `ConfigWorkers.json` as described below.
+
+3. Register the service and start it:
+
+```powershell
+& C:\WorkerControl\WorkerControl.exe /install
+Start-Service WorkerControlService
+```
+
+The service is registered as `WorkerControlService`, shown as "WorkerControl" in the services list. It starts with Windows and runs under the Local System account, and so does every application it starts.
+
+4. Check that it is running:
+
+```powershell
+Get-Service WorkerControlService
+```
+
+Within the time set in `MonitoringRate`, the applications of the enabled groups appear in the Task Manager.
 
 ## ⚡️ Configuration
 
-After install Worker Control, in the installation folder, there is a file named ConfigWorkers.json. Change it as you need.
+The settings are in `ConfigWorkers.json`, in the same folder as `WorkerControl.exe`.
 
 ```json
 {
@@ -96,7 +126,7 @@ To your application work with Worker Control, it needs to be implemented the wra
 | _Language_ | _Status_        | _Link_            | 
 | ---------- | --------------- | ----------------- |
 |  Delphi    | Done            | [`Delphi Wrapper`](https://github.com/MurilloLazzaretti/worker-delphi-wrapper)|
-|  .NET C#   | Coming soon     | |
+|  .NET C#   | Done            | [`.NET Wrapper C#`](https://github.com/MurilloLazzaretti/Worker-.NET-Wrapper)|
 
 ## 🧬 Resources
 
@@ -108,6 +138,22 @@ If any instace controled by the service may crash, it will notice by him and wil
 
 When Worker Control needs to close safelly an app, it will send a message to the app and when the app finish all your tasks, it will be closed.
 
+## ⬆️ Update
+
+Replace the executable with the service stopped. `ConfigWorkers.json` stays as it is.
+
+```powershell
+Stop-Service WorkerControlService -Force
+Copy-Item .\WorkerControl.exe C:\WorkerControl\WorkerControl.exe -Force
+Start-Service WorkerControlService
+```
+
+Stopping the service asks every application it controls to stop.
+
 ## 🔥 Uninstall
 
-To uninstall the Worker Control, under the folder of the installation, there is a file named "unins000.exe" just run it and next, next next...
+```powershell
+Stop-Service WorkerControlService -Force
+& C:\WorkerControl\WorkerControl.exe /uninstall
+Remove-Item C:\WorkerControl -Recurse
+```
