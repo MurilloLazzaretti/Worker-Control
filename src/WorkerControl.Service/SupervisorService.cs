@@ -13,7 +13,7 @@ namespace WorkerControl.Service;
 /// second, records what happens and answers whoever administers the service. When the service
 /// stops, it stops the workers too.
 /// </summary>
-internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets) : BackgroundService
+internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets, IDatabaseWriter databaseWriter) : BackgroundService
 {
     /// <summary>
     /// A file of this name in the data folder when the service stops means: leave the workers
@@ -83,7 +83,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
         using var databaseHistory = DatabaseHistory.TryOpen(_directory, _logger);
         using var objectHistory = ObjectHistory.TryOpen(_directory, _logger);
-        using var database = new DatabaseMonitor(databaseSource, secrets, databaseHistory, time, loggers.CreateLogger("WorkerControl.Database"), objectHistory);
+        using var database = new DatabaseMonitor(databaseSource, secrets, databaseHistory, time, loggers.CreateLogger("WorkerControl.Database"), objectHistory, databaseWriter);
         database.Event += Record;
         database.ApplyConfig(config.Database);
         _database = database;
@@ -461,6 +461,30 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 try
                 {
                     return DatabaseAnswers.Expensive(_database.ExpensiveAsync().GetAwaiter().GetResult());
+                }
+                catch (Exception error) when (error is System.Data.Common.DbException or InvalidOperationException or TimeoutException)
+                {
+                    return Admin.Error("database-failed", error.Message);
+                }
+            }
+
+            case "DatabaseApply":
+            {
+                string? Text(string name) => request.Value<string>(name) is { Length: > 0 } value ? value : null;
+                if (Text("Package") is not { } package || request.Value<int?>("Item") is not { } item || Text("Action") is not { } action)
+                    return Admin.Error("invalid-request", "\"Package\", \"Item\" and \"Action\" are required");
+                try
+                {
+                    var (database, result) = _database!.ApplyAsync(Text("Database"),
+                        new ApplyRequest(package, item, action, Text("Kind"), Text("Variety"), Text("Schema"), Text("Name"), request.Value<string>("Script"))).GetAwaiter().GetResult();
+                    Record(result.Ok ? EventKind.ManualAction : EventKind.DatabaseAlert,
+                        $"item {item} of package {package}: {(result.Ok ? result.Did : "failed, " + result.Error)}{(Text("Name") is { } name ? $" ({Text("Schema")}.{name})" : "")}" + by,
+                        DatabaseMonitor.GroupPrefix + database);
+                    return DatabaseAnswers.Applied(database, result);
+                }
+                catch (DatabaseMonitor.Refused refused)
+                {
+                    return Admin.Error(refused.Code, refused.Message);
                 }
                 catch (Exception error) when (error is System.Data.Common.DbException or InvalidOperationException or TimeoutException)
                 {

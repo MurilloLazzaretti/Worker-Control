@@ -326,11 +326,11 @@ public sealed class DatabaseMonitorTests
         Assert.Equal(["Sales"], _instance.CatalogsRead);
 
         var refused = await Assert.ThrowsAsync<DatabaseMonitor.Refused>(() => monitor.ObjectsAsync("Payroll"));
-        Assert.Equal("not-found", refused.Code);
+        Assert.Equal("unknown-database", refused.Code);
         Assert.Equal(["Sales"], _instance.CatalogsRead);
 
         using var none = Monitor(Config());
-        Assert.Equal("not-found", (await Assert.ThrowsAsync<DatabaseMonitor.Refused>(() => none.ObjectsAsync(null))).Code);
+        Assert.Equal("unknown-database", (await Assert.ThrowsAsync<DatabaseMonitor.Refused>(() => none.ObjectsAsync(null))).Code);
     }
 
     [Fact]
@@ -772,6 +772,78 @@ public sealed class ObjectWatcherTests : IDisposable
 }
 
 /// <summary>
+/// A database that takes whatever it is told to apply, and remembers it.
+/// </summary>
+internal sealed class PretendWriter : IDatabaseWriter
+{
+    public List<(string Database, ApplyRequest Request)> Applied { get; } = [];
+    public ApplyResult Result { get; set; } = new(true, "altered", null, null, null, ["1 row affected"]);
+
+    public Task<ApplyResult> ApplyAsync(DatabaseConnection connection, string database, ApplyRequest request, CancellationToken stopping)
+    {
+        Applied.Add((database, request));
+        return Task.FromResult(Result);
+    }
+}
+
+public sealed class SqlApplyTests
+{
+    [Fact]
+    public void A_script_is_split_where_a_line_says_only_go()
+    {
+        var batches = SqlApply.Batches("""
+            CREATE TABLE t (a int)
+            GO
+            -- GO in a comment line stays
+            INSERT INTO t VALUES ('a
+            GO
+            b')
+              go  -- the end of this one
+            /* a block
+            GO
+            still the block */
+            SELECT 1
+            GO 3
+
+            GO
+            """);
+
+        Assert.Equal(3, batches.Count);
+        Assert.Equal("CREATE TABLE t (a int)", batches[0]);
+        Assert.Contains("GO\nb')", batches[1]);
+        Assert.StartsWith("-- GO in a comment line stays", batches[1]);
+        Assert.Contains("GO\nstill the block */\nSELECT 1", batches[2]);
+        Assert.Empty(SqlApply.Batches("  \n GO \n"));
+    }
+
+    [Theory]
+    [InlineData("CREATE PROCEDURE dbo.p AS SELECT 1", true, "ALTER PROCEDURE dbo.p AS SELECT 1")]
+    [InlineData("create  proc dbo.p AS SELECT 1", true, "ALTER  proc dbo.p AS SELECT 1")]
+    [InlineData("ALTER VIEW v AS SELECT 1", false, "CREATE VIEW v AS SELECT 1")]
+    [InlineData("CREATE OR ALTER FUNCTION f() RETURNS int AS BEGIN RETURN 1 END", false, "CREATE FUNCTION f() RETURNS int AS BEGIN RETURN 1 END")]
+    [InlineData("-- create view old\n/* ALTER PROC x */\n  CREATE VIEW v AS SELECT 'create view x'", true, "-- create view old\n/* ALTER PROC x */\n  ALTER VIEW v AS SELECT 'create view x'")]
+    [InlineData("CREATE TRIGGER t ON x AFTER INSERT AS RETURN", true, "ALTER TRIGGER t ON x AFTER INSERT AS RETURN")]
+    public void What_creates_a_module_is_made_to_alter_it_and_back(string script, bool alter, string expected) =>
+        Assert.Equal(expected, SqlApply.AsCreate(script, alter));
+
+    [Theory]
+    [InlineData("SET NOCOUNT ON; CREATE VIEW v AS SELECT 1")]
+    [InlineData("CREATE TABLE t (a int)")]
+    [InlineData("DROP PROCEDURE p")]
+    [InlineData("")]
+    public void What_does_not_begin_by_creating_a_module_is_left_alone(string script) =>
+        Assert.Null(SqlApply.AsCreate(script, alter: true));
+
+    [Fact]
+    public void A_drop_is_written_from_the_name_and_never_from_the_package()
+    {
+        Assert.Equal("DROP PROCEDURE [dbo].[sp]]Odd];", SqlApply.Drop("Procedure", "P", "dbo", "sp]Odd"));
+        Assert.Equal("DROP TYPE [dbo].[List];", SqlApply.Drop("Type", "TT", "dbo", "List"));
+        Assert.Throws<ArgumentException>(() => SqlApply.Drop("Database", null, "dbo", "x"));
+    }
+}
+
+/// <summary>
 /// The database through the administration contract, with the service running.
 /// </summary>
 [Collection("processes")]
@@ -785,8 +857,10 @@ public class DatabaseAdminTests
         var instance = new PretendInstance();
         instance.Expensive.Add(new ExpensiveQuery("Sales", "dbo.GetOrders", 10, 100, 200, 3000, 50, 1, true, false, false, "SELECT ?"));
         await using var rig = new Rig { DatabaseJson = Section };
+        var writer = new PretendWriter();
         rig.Register = services =>
         {
+            services.AddSingleton<IDatabaseWriter>(writer);
             services.AddSingleton<IDatabaseSource>(instance);
             services.AddSingleton<ISecretProtector>(new PretendProtector());
         };
@@ -826,8 +900,27 @@ public class DatabaseAdminTests
         Assert.Equal(0, (await rig.CommandAsync("DatabaseChanges"))!.Value<int>("Total"));
         Assert.Equal("not-found", (await rig.CommandAsync("DatabaseChange", request => request["Id"] = 99))!["Error"]!.Value<string>("Code"));
 
+        // An item of a package is applied to the database of the environment, whatever it is called here.
+        var applied = await rig.CommandAsync("DatabaseApply", request =>
+        {
+            request["Package"] = "p-1"; request["Item"] = 2; request["Action"] = "Define"; request["Kind"] = "Procedure"; request["Schema"] = "dbo"; request["Name"] = "spCloseOrders";
+            request["Script"] = "CREATE PROCEDURE dbo.spCloseOrders AS RETURN"; request["By"] = "ana";
+        });
+        Assert.Equal((true, "Sales", "altered"), (applied!.Value<bool>("Applied"), applied.Value<string>("Database"), applied.Value<string>("Did")));
+        var (where, what) = Assert.Single(writer.Applied);
+        Assert.Equal(("Sales", "p-1", 2, "Define", "spCloseOrders"), (where, what.Package, what.Item, what.Action, what.Name));
+        // What the instance refused comes back as such, not as a command that failed.
+        writer.Result = new ApplyResult(false, null, "Invalid column name 'x'.", 1, 12, []);
+        var refused = await rig.CommandAsync("DatabaseApply", request => { request["Package"] = "p-1"; request["Item"] = 3; request["Action"] = "Script"; request["Script"] = "UPDATE t SET x = 1"; });
+        Assert.Equal((true, false, "Invalid column name 'x'.", 12), (refused!.Value<bool>("Ok"), refused.Value<bool>("Applied"), refused.Value<string>("Problem"), refused.Value<int>("Line")));
+        // Never to a database the configuration does not name.
+        var elsewhere = await rig.CommandAsync("DatabaseApply", request => { request["Package"] = "p-1"; request["Item"] = 4; request["Action"] = "Script"; request["Script"] = "SELECT 1"; request["Database"] = "Payroll"; });
+        Assert.Equal("unknown-database", elsewhere!["Error"]!.Value<string>("Code"));
+        Assert.Equal("invalid-request", (await rig.CommandAsync("DatabaseApply", request => request["Package"] = "p-1"))!["Error"]!.Value<string>("Code"));
+        Assert.Equal(2, writer.Applied.Count);
+
         var other = await rig.CommandAsync("DatabaseObjects", request => request["Database"] = "Payroll");
-        Assert.Equal("not-found", other!["Error"]!.Value<string>("Code"));
+        Assert.Equal("unknown-database", other!["Error"]!.Value<string>("Code"));
     }
 
     [Fact]

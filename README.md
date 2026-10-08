@@ -302,6 +302,10 @@ databases, disks, backups, jobs and the statements that cost the most. Only SQL 
   again, and an object is the same while its script is. The first look at a database only
   records how it is. Who made the change is taken from the default trace of the instance, when
   it can be read.
+- One thing writes to the database, and only one: the item of a package of changes somebody
+  approved on the panel (`DatabaseApply`). It goes to a database that is named in `Databases`
+  and nowhere else, each item in a transaction of its own. An object that exists is altered
+  instead of created again; a table or a type that exists is refused.
 - `BackupHours` zero does not look at backups. The history of the charts is kept in `database.db`.
 
 ## ⚙️ Installation

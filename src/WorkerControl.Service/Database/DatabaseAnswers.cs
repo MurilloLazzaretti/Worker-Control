@@ -96,4 +96,18 @@ internal static class DatabaseAnswers
     });
 
     public static JObject Change(ObjectChange change) => Admin.Ok(answer => answer["Change"] = Token(change));
+
+    /// <summary>
+    /// The command was understood and tried; whether the script went through is in <c>Applied</c>.
+    /// </summary>
+    public static JObject Applied(string database, ApplyResult result) => Admin.Ok(answer =>
+    {
+        answer["Database"] = database;
+        answer["Applied"] = result.Ok;
+        answer["Did"] = result.Did;
+        answer["Problem"] = result.Error;
+        answer["Batch"] = result.Batch;
+        answer["Line"] = result.Line;
+        answer["Messages"] = new JArray(result.Messages);
+    });
 }

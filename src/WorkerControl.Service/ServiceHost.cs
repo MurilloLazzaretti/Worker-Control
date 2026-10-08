@@ -63,6 +63,8 @@ public static class ServiceHost
         }
         if (!builder.Services.Any(service => service.ServiceType == typeof(Database.IDatabaseSource)))
             builder.Services.AddSingleton<Database.IDatabaseSource, Database.SqlServerSource>();
+        if (!builder.Services.Any(service => service.ServiceType == typeof(Database.IDatabaseWriter)))
+            builder.Services.AddSingleton<Database.IDatabaseWriter, Database.SqlServerWriter>();
         if (!builder.Services.Any(service => service.ServiceType == typeof(Database.ISecretProtector)))
         {
             if (OperatingSystem.IsWindows())

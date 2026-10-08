@@ -39,7 +39,7 @@ public sealed record DatabaseState
 /// what asks for attention on it. It looks from a thread of its own, so an instance that takes
 /// long to answer never delays the supervision of the workers.
 /// </summary>
-internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector protector, DatabaseHistory? history, TimeProvider time, ILogger logger, ObjectHistory? objects = null) : IDisposable
+internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector protector, DatabaseHistory? history, TimeProvider time, ILogger logger, ObjectHistory? objects = null, IDatabaseWriter? writer = null) : IDisposable
 {
     public const string GroupPrefix = "database:";
 
@@ -353,6 +353,32 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
     /// </summary>
     internal TimeSpan ScanPause { get; init; } = TimeSpan.FromMilliseconds(20);
 
+    // ---------------------------------------------------------------- applying what a package brings
+
+    /// <summary>
+    /// Applies one item of a package somebody approved, to a database the configuration names.
+    /// The objects are looked at again right after, so that what changed is noticed without waiting.
+    /// </summary>
+    public async Task<(string Database, ApplyResult Result)> ApplyAsync(string? database, ApplyRequest request)
+    {
+        if (writer is null)
+            throw new Refused("database-failed", "This service cannot write to the database");
+        var (_, connection, name) = Target(database);
+        logger.LogInformation("Applying item {Item} of package {Package} to {Database}: {Action} {Kind} {Schema}.{Name}",
+            request.Item, request.Package, name, request.Action, request.Kind, request.Schema, request.Name);
+        var result = await writer.ApplyAsync(connection, name, request, _stopping.Token);
+        if (result.Ok)
+            logger.LogInformation("Item {Item} of package {Package} applied to {Database}: {Did}", request.Item, request.Package, name, result.Did);
+        else
+            logger.LogWarning("Item {Item} of package {Package} was not applied to {Database}: {Error}", request.Item, request.Package, name, result.Error);
+        lock (_gate)
+        {
+            _catalogs.Remove(name);
+            _nextScan = DateTimeOffset.MinValue;
+        }
+        return (name, result);
+    }
+
     // ---------------------------------------------------------------- objects
 
     private static readonly TimeSpan CatalogFor = TimeSpan.FromSeconds(60);
@@ -375,8 +401,11 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             throw new Refused("not-configured", "No database is configured");
         // Only the databases the configuration names: nothing here is a way into the others.
         var name = string.IsNullOrEmpty(database) ? config.Databases.FirstOrDefault() : config.Databases.FirstOrDefault(item => item.Equals(database, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrEmpty(database) && config.Databases.Count > 1)
+            throw new Refused("invalid-request", "More than one database is named in the configuration; say which one");
         if (name is null)
-            throw new Refused("not-found", config.Databases.Count == 0
+            // Not "not found": that is said of an object, and a database that is not watched is another matter.
+            throw new Refused("unknown-database", config.Databases.Count == 0
                 ? "No database is named in \"Databases\" of the configuration"
                 : $"The database {database} is not among the ones named in \"Databases\" of the configuration");
         if (Connection(config) is not { } connection)
