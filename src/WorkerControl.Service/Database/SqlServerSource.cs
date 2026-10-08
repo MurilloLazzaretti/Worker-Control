@@ -10,12 +10,12 @@ internal sealed class SqlServerSource : IDatabaseSource
 {
     private const int CommandSeconds = 10;
 
-    public static string ConnectionString(DatabaseConnection connection)
+    public static string ConnectionString(DatabaseConnection connection, string database = "master")
     {
         var builder = new SqlConnectionStringBuilder
         {
             DataSource = connection.Server,
-            InitialCatalog = "master",
+            InitialCatalog = database,
             ApplicationName = "WorkerControl",
             ConnectTimeout = 5,
             Encrypt = connection.Encrypt ? SqlConnectionEncryptOption.Mandatory : SqlConnectionEncryptOption.Optional,
@@ -116,9 +116,129 @@ internal sealed class SqlServerSource : IDatabaseSource
                 (int)Number(row, 7), Number(row, 8) == 1, Number(row, 9) == 1, Number(row, 10) == 1, SqlText.Mask(Text(row, 11))));
     }
 
-    private static async Task<SqlConnection> OpenAsync(DatabaseConnection connection, CancellationToken stopping)
+    // ---------------------------------------------------------------- objects
+
+    public static string Kind(string variety) => variety switch
     {
-        var sql = new SqlConnection(ConnectionString(connection));
+        "U" => "Table",
+        "V" => "View",
+        "P" => "Procedure",
+        "FN" or "IF" or "TF" => "Function",
+        "T" or "TT" => "Type",
+        _ => variety
+    };
+
+    private static CatalogObject Listed(DbDataReader row) =>
+        new((int)Number(row, 0), Kind(Text(row, 3)), Text(row, 1), Text(row, 2), Text(row, 3), Moment(row, 4), Moment(row, 5),
+            row.IsDBNull(6) ? null : Number(row, 6), row.IsDBNull(7) ? null : Number(row, 7));
+
+    public async Task<IReadOnlyList<CatalogObject>> ObjectsAsync(DatabaseConnection connection, string database, CancellationToken stopping)
+    {
+        await using var sql = await OpenAsync(connection, stopping, database);
+        List<CatalogObject> objects;
+        try
+        {
+            objects = await ReadAsync(sql, Queries.Objects, stopping, Listed);
+        }
+        catch (SqlException) when (sql.State == System.Data.ConnectionState.Open)
+        {
+            // Without leave to see how big the tables are, the list still comes.
+            objects = await ReadAsync(sql, Queries.ObjectsPlain, stopping, Listed);
+        }
+        objects.AddRange(await ReadAsync(sql, Queries.Types, stopping, Listed));
+        return objects;
+    }
+
+    public async Task<CatalogDetail> ObjectAsync(DatabaseConnection connection, string database, CatalogObject target, CancellationToken stopping)
+    {
+        await using var sql = await OpenAsync(connection, stopping, database);
+        var problems = new Dictionary<string, string>();
+        Task<List<T>?> By<T>(string part, string text, int id, Func<DbDataReader, T> read) =>
+            Part(sql, part, text, problems, stopping, command => command.Parameters.Add(new SqlParameter("@id", System.Data.SqlDbType.Int) { Value = id }), read);
+
+        static RawType Raw(DbDataReader row, int at) => new(Text(row, at), row.IsDBNull(at + 1) ? null : Text(row, at + 1), (int)Number(row, at + 2), (int)Number(row, at + 3), (int)Number(row, at + 4));
+        static string? Maybe(DbDataReader row, int at) => row.IsDBNull(at) ? null : Text(row, at);
+        static bool Flag(DbDataReader row, int at) => !row.IsDBNull(at) && Convert.ToBoolean(row.GetValue(at));
+
+        Task<List<CatalogColumn>?> ColumnsOf(int id) => By("Columns", Queries.Columns, id, row =>
+            new CatalogColumn(Text(row, 0), Raw(row, 1), Flag(row, 6), Flag(row, 7), Maybe(row, 8), Maybe(row, 9), Maybe(row, 10), Maybe(row, 11), Flag(row, 12), Maybe(row, 13), Flag(row, 14), Maybe(row, 15)));
+
+        async Task<List<CatalogIndex>> IndexesOf(int id)
+        {
+            var rows = await By("Indexes", Queries.Indexes, id, row => (Id: (int)Number(row, 0), Name: Text(row, 1), Variety: Text(row, 2), Unique: Flag(row, 3), Primary: Flag(row, 4),
+                Constraint: Flag(row, 5), Disabled: Flag(row, 6), Filter: Maybe(row, 7), Column: new CatalogIndexColumn(Text(row, 8), Flag(row, 9), Flag(row, 10))));
+            return [.. (rows ?? []).GroupBy(row => row.Id).Select(group => new CatalogIndex(group.First().Name, group.First().Variety, group.First().Unique, group.First().Primary,
+                group.First().Constraint, group.First().Disabled, group.First().Filter, [.. group.Select(row => row.Column)]))];
+        }
+
+        Task<List<CatalogCheck>?> ChecksOf(int id) => By("Checks", Queries.Checks, id, row => new CatalogCheck(Text(row, 0), Text(row, 1), Flag(row, 2)));
+
+        static CatalogReference Reference(DbDataReader row) => new(Maybe(row, 0), Text(row, 1), row.IsDBNull(2) ? null : Kind(Text(row, 2)), Maybe(row, 3));
+        static List<CatalogReference> Sorted(List<CatalogReference>? references) =>
+            [.. (references ?? []).OrderBy(reference => reference.Schema, StringComparer.OrdinalIgnoreCase).ThenBy(reference => reference.Name, StringComparer.OrdinalIgnoreCase)];
+
+        var collation = (await Part(sql, "Collation", Queries.Collation, problems, stopping, row => Maybe(row, 0)))?.FirstOrDefault();
+        var detail = new CatalogDetail { Object = target };
+
+        if (target.Kind == "Type")
+        {
+            var made = (await By("Type", Queries.TypeBase, target.Id, row => (Raw: new RawType(Text(row, 0), null, (int)Number(row, 1), (int)Number(row, 2), (int)Number(row, 3)), Nullable: Flag(row, 4), Table: Whole(row, 5))))?.FirstOrDefault();
+            var usedBy = Sorted(await By("UsedBy", Queries.TypeUsedBy, target.Id, Reference));
+            if (made is { Table: { } table })
+            {
+                detail = detail with { Columns = await ColumnsOf(table) ?? [], Indexes = await IndexesOf(table), Checks = await ChecksOf(table) ?? [], UsedBy = usedBy };
+                detail = detail with { Script = SqlScript.TableType(detail, collation) };
+            }
+            else if (made is not null)
+            {
+                var from = SqlScript.TypeName(made.Value.Raw);
+                detail = detail with { BaseType = from, UsedBy = usedBy, Script = SqlScript.ScalarType(target, from, made.Value.Nullable) };
+            }
+        }
+        else
+        {
+            var uses = Sorted(await By("Uses", Queries.Uses, target.Id, Reference));
+            var usedBy = Sorted(await By("UsedBy", Queries.UsedBy, target.Id, Reference));
+            detail = detail with { Columns = target.Kind == "Procedure" ? [] : await ColumnsOf(target.Id) ?? [], Uses = uses, UsedBy = usedBy };
+
+            if (target.Kind == "Table")
+            {
+                var keys = await By("ForeignKeys", Queries.ForeignKeys, target.Id, row => (Name: Text(row, 0), Column: Text(row, 1), Schema: Text(row, 2), Table: Text(row, 3), Referenced: Text(row, 4),
+                    OnDelete: Text(row, 5), OnUpdate: Text(row, 6), Disabled: Flag(row, 7)));
+                detail = detail with
+                {
+                    Indexes = await IndexesOf(target.Id),
+                    Checks = await ChecksOf(target.Id) ?? [],
+                    ForeignKeys = [.. (keys ?? []).GroupBy(key => key.Name).Select(group => new CatalogForeignKey(group.Key, [.. group.Select(key => key.Column)], group.First().Schema, group.First().Table,
+                        [.. group.Select(key => key.Referenced)], group.First().OnDelete, group.First().OnUpdate, group.First().Disabled))],
+                    Triggers = await By("Triggers", Queries.Triggers, target.Id, row => new CatalogTrigger(Text(row, 0), Flag(row, 1), Flag(row, 2), Maybe(row, 3))) ?? []
+                };
+                detail = detail with { Script = SqlScript.Table(detail, collation) };
+            }
+            else
+            {
+                var text = (await By("Definition", Queries.Definition, target.Id, row => Maybe(row, 0)))?.FirstOrDefault();
+                var parameters = await By("Parameters", Queries.Parameters, target.Id, row => (Id: (int)Number(row, 0), Parameter: new CatalogParameter(Text(row, 1), Raw(row, 2), Flag(row, 7), Flag(row, 8)))) ?? [];
+                var defaults = SqlScript.ParameterDefaults(text, parameters.Select(parameter => parameter.Parameter.Name));
+                detail = detail with
+                {
+                    Parameters = [.. parameters.Where(parameter => parameter.Id > 0).Select(parameter => defaults.TryGetValue(parameter.Parameter.Name, out var value) ? parameter.Parameter with { Default = value } : parameter.Parameter)],
+                    Returns = parameters.Where(parameter => parameter.Id == 0).Select(parameter => parameter.Parameter.Type).FirstOrDefault(),
+                    Script = text is null ? null : text.Trim() + "\n",
+                    ScriptSource = text is null ? "encrypted" : "instance",
+                    Triggers = target.Kind == "View" ? await By("Triggers", Queries.Triggers, target.Id, row => new CatalogTrigger(Text(row, 0), Flag(row, 1), Flag(row, 2), Maybe(row, 3))) ?? [] : []
+                };
+            }
+        }
+
+        return detail with { Fingerprint = detail.Script is null ? null : SqlScript.Fingerprint(detail.Script), Problems = problems };
+    }
+
+    private static DateTime? Moment(DbDataReader row, int column) => row.IsDBNull(column) ? null : DateTime.SpecifyKind(row.GetDateTime(column), DateTimeKind.Utc);
+
+    private static async Task<SqlConnection> OpenAsync(DatabaseConnection connection, CancellationToken stopping, string database = "master")
+    {
+        var sql = new SqlConnection(ConnectionString(connection, database));
         try
         {
             await sql.OpenAsync(stopping);
@@ -139,11 +259,14 @@ internal sealed class SqlServerSource : IDatabaseSource
     /// One part of a sample. What the user of the connection may not read, or the instance
     /// does not have, is told apart from the instance being unreachable: the rest still comes.
     /// </summary>
-    private static async Task<List<T>?> Part<T>(SqlConnection sql, string name, string text, Dictionary<string, string> problems, CancellationToken stopping, Func<DbDataReader, T> read)
+    private static Task<List<T>?> Part<T>(SqlConnection sql, string name, string text, Dictionary<string, string> problems, CancellationToken stopping, Func<DbDataReader, T> read) =>
+        Part(sql, name, text, problems, stopping, null, read);
+
+    private static async Task<List<T>?> Part<T>(SqlConnection sql, string name, string text, Dictionary<string, string> problems, CancellationToken stopping, Action<SqlCommand>? prepare, Func<DbDataReader, T> read)
     {
         try
         {
-            return await ReadAsync(sql, text, stopping, read);
+            return await ReadAsync(sql, text, stopping, prepare, read);
         }
         catch (SqlException error) when (sql.State == System.Data.ConnectionState.Open)
         {

@@ -70,6 +70,7 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             var same = config is not null && _config is not null && config.Server == _config.Server && config.User == _config.User && config.Password == _config.Password;
             _config = config;
             _next = _nextSlow = DateTimeOffset.MinValue;
+            _catalogs.Clear();
             if (!same)
             {
                 _batches = null;
@@ -253,6 +254,67 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
         lock (_gate)
             _expensive = (queries, now);
         return queries;
+    }
+
+    // ---------------------------------------------------------------- objects
+
+    private static readonly TimeSpan CatalogFor = TimeSpan.FromSeconds(60);
+    private readonly Dictionary<string, (IReadOnlyList<CatalogObject> Objects, DateTimeOffset At)> _catalogs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Thrown when what was asked cannot be answered for a reason the one asking can fix.
+    /// </summary>
+    public sealed class Refused(string code, string message) : Exception(message)
+    {
+        public string Code { get; } = code;
+    }
+
+    private (DatabaseConfig Config, DatabaseConnection Connection, string Database) Target(string? database)
+    {
+        DatabaseConfig? config;
+        lock (_gate)
+            config = _config;
+        if (config is null)
+            throw new Refused("not-configured", "No database is configured");
+        // Only the databases the configuration names: nothing here is a way into the others.
+        var name = string.IsNullOrEmpty(database) ? config.Databases.FirstOrDefault() : config.Databases.FirstOrDefault(item => item.Equals(database, StringComparison.OrdinalIgnoreCase));
+        if (name is null)
+            throw new Refused("not-found", config.Databases.Count == 0
+                ? "No database is named in \"Databases\" of the configuration"
+                : $"The database {database} is not among the ones named in \"Databases\" of the configuration");
+        if (Connection(config) is not { } connection)
+            throw new Refused("database-failed", "The password in the configuration cannot be read on this machine");
+        return (config, connection, name);
+    }
+
+    /// <summary>
+    /// Everything defined in a database, read again once in a while.
+    /// </summary>
+    public async Task<(string Database, IReadOnlyList<CatalogObject> Objects, DateTimeOffset At)> ObjectsAsync(string? database, bool fresh = false)
+    {
+        var (_, connection, name) = Target(database);
+        var now = time.GetUtcNow();
+        lock (_gate)
+            if (!fresh && _catalogs.TryGetValue(name, out var kept) && now - kept.At < CatalogFor)
+                return (name, kept.Objects, kept.At);
+
+        var objects = await source.ObjectsAsync(connection, name, _stopping.Token);
+        lock (_gate)
+            _catalogs[name] = (objects, now);
+        return (name, objects, now);
+    }
+
+    public async Task<(string Database, CatalogDetail Detail)> ObjectAsync(string? database, string kind, string schema, string name)
+    {
+        async Task<CatalogObject?> Find(bool fresh) =>
+            (await ObjectsAsync(database, fresh)).Objects.FirstOrDefault(item => item.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase)
+                && item.Schema.Equals(schema, StringComparison.OrdinalIgnoreCase) && item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        // Something created a moment ago is not in what was read before.
+        var target = await Find(fresh: false) ?? await Find(fresh: true)
+            ?? throw new Refused("not-found", $"There is no {kind.ToLowerInvariant()} called {schema}.{name}");
+        var (_, connection, found) = Target(database);
+        return (found, await source.ObjectAsync(connection, found, target, _stopping.Token));
     }
 
     private DatabaseConnection? Connection(DatabaseConfig config)

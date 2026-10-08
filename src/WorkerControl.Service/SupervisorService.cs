@@ -447,6 +447,32 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 }
             }
 
+            case "DatabaseObjects":
+            case "DatabaseObject":
+            {
+                string? Text(string name) => request.Value<string>(name) is { Length: > 0 } value ? value : null;
+                try
+                {
+                    if (command == "DatabaseObjects")
+                    {
+                        var (name, objects, at) = _database!.ObjectsAsync(Text("Database"), request.Value<bool?>("Fresh") == true).GetAwaiter().GetResult();
+                        return DatabaseAnswers.Objects(name, objects, at, Text("Kind"), Text("Schema"), Text("Search"), Text("Sort"), request.Value<int?>("Limit") ?? 100, request.Value<int?>("Offset") ?? 0);
+                    }
+                    if (Text("Kind") is not { } kind || Text("Schema") is not { } schema || Text("Name") is not { } wanted)
+                        return Admin.Error("invalid-request", "\"Kind\", \"Schema\" and \"Name\" are required");
+                    var (database, detail) = _database!.ObjectAsync(Text("Database"), kind, schema, wanted).GetAwaiter().GetResult();
+                    return DatabaseAnswers.Object(database, detail);
+                }
+                catch (DatabaseMonitor.Refused refused)
+                {
+                    return Admin.Error(refused.Code, refused.Message);
+                }
+                catch (Exception error) when (error is System.Data.Common.DbException or InvalidOperationException or TimeoutException)
+                {
+                    return Admin.Error("database-failed", error.Message);
+                }
+            }
+
             case "Frontends":
             {
                 var (apps, publications) = _frontends!.Snapshot();

@@ -95,4 +95,14 @@ public interface IDatabaseSource
     /// The statements that cost the most in the databases named; in all of the applications when none is.
     /// </summary>
     Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, IReadOnlyList<string> databases, CancellationToken stopping);
+
+    /// <summary>
+    /// Everything defined in one database: tables, views, procedures, functions and types.
+    /// </summary>
+    Task<IReadOnlyList<CatalogObject>> ObjectsAsync(DatabaseConnection connection, string database, CancellationToken stopping);
+
+    /// <summary>
+    /// All there is to say about one object, and what creates it.
+    /// </summary>
+    Task<CatalogDetail> ObjectAsync(DatabaseConnection connection, string database, CatalogObject target, CancellationToken stopping);
 }

@@ -40,6 +40,26 @@ internal sealed class PretendInstance : IDatabaseSource
 
     public IReadOnlyList<string> ExpensiveOf { get; private set; } = [];
 
+    public List<CatalogObject> Catalog { get; } =
+    [
+        new(1, "Table", "dbo", "Orders", "U", new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc), 1200, 640),
+        new(2, "Table", "dbo", "Customers", "U", null, new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc), 90, 64),
+        new(3, "View", "dbo", "vwOrders", "V", null, new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc), null, null),
+        new(4, "Procedure", "dbo", "spCloseOrders", "P", null, null, null, null),
+        new(5, "Function", "audit", "fncOrdersOf", "TF", null, null, null, null),
+        new(6, "Type", "dbo", "OrderList", "TT", null, null, null, null)
+    ];
+    public List<string> CatalogsRead { get; } = [];
+
+    public Task<IReadOnlyList<CatalogObject>> ObjectsAsync(DatabaseConnection connection, string database, CancellationToken stopping)
+    {
+        CatalogsRead.Add(database);
+        return Task.FromResult<IReadOnlyList<CatalogObject>>([.. Catalog]);
+    }
+
+    public Task<CatalogDetail> ObjectAsync(DatabaseConnection connection, string database, CatalogObject target, CancellationToken stopping) =>
+        Task.FromResult(new CatalogDetail { Object = target, Script = "CREATE " + target.Name, ScriptSource = "instance", Fingerprint = SqlScript.Fingerprint("CREATE " + target.Name) });
+
     public Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, IReadOnlyList<string> databases, CancellationToken stopping)
     {
         ExpensiveAsked++;
@@ -282,6 +302,39 @@ public sealed class DatabaseMonitorTests
     }
 
     [Fact]
+    public async Task The_objects_are_only_of_a_database_the_configuration_names()
+    {
+        using var monitor = Monitor(Config(databases: ["Sales"]));
+
+        var (database, objects, _) = await monitor.ObjectsAsync(null);
+        Assert.Equal("Sales", database);
+        Assert.Equal(6, objects.Count);
+        await monitor.ObjectsAsync("SALES");
+        Assert.Equal(["Sales"], _instance.CatalogsRead);
+
+        var refused = await Assert.ThrowsAsync<DatabaseMonitor.Refused>(() => monitor.ObjectsAsync("Payroll"));
+        Assert.Equal("not-found", refused.Code);
+        Assert.Equal(["Sales"], _instance.CatalogsRead);
+
+        using var none = Monitor(Config());
+        Assert.Equal("not-found", (await Assert.ThrowsAsync<DatabaseMonitor.Refused>(() => none.ObjectsAsync(null))).Code);
+    }
+
+    [Fact]
+    public async Task An_object_made_a_moment_ago_is_looked_for_again()
+    {
+        using var monitor = Monitor(Config(databases: ["Sales"]));
+        await monitor.ObjectsAsync(null);
+        _instance.Catalog.Add(new CatalogObject(7, "Procedure", "dbo", "spNew", "P", null, null, null, null));
+
+        var (_, detail) = await monitor.ObjectAsync(null, "procedure", "DBO", "spnew");
+
+        Assert.Equal("spNew", detail.Object.Name);
+        Assert.Equal(2, _instance.CatalogsRead.Count);
+        Assert.Equal("not-found", (await Assert.ThrowsAsync<DatabaseMonitor.Refused>(() => monitor.ObjectAsync(null, "Table", "dbo", "Nothing"))).Code);
+    }
+
+    [Fact]
     public async Task Backups_are_not_looked_at_unless_asked()
     {
         var config = Config(backupHours: 0);
@@ -400,6 +453,145 @@ public sealed class DatabasePartsTests : IDisposable
         Assert.InRange(history.Read(start, start.AddDays(1)).Count, 10, 20);
     }
 
+    [Theory]
+    [InlineData("nvarchar", 100, 0, 0, "nvarchar(50)")]
+    [InlineData("nvarchar", -1, 0, 0, "nvarchar(max)")]
+    [InlineData("varchar", 20, 0, 0, "varchar(20)")]
+    [InlineData("VARBINARY", -1, 0, 0, "varbinary(max)")]
+    [InlineData("decimal", 9, 18, 2, "decimal(18, 2)")]
+    [InlineData("datetime2", 8, 27, 7, "datetime2")]
+    [InlineData("datetime2", 7, 23, 3, "datetime2(3)")]
+    [InlineData("float", 8, 53, 0, "float")]
+    [InlineData("int", 4, 10, 0, "int")]
+    [InlineData("datetime", 8, 23, 3, "datetime")]
+    public void A_type_is_written_as_a_script_writes_it(string name, int length, int precision, int scale, string expected) =>
+        Assert.Equal(expected, SqlScript.TypeName(new RawType(name, null, length, precision, scale)));
+
+    private static CatalogColumn Column(string name, string type, int length = 4, bool nullable = false, bool identity = false, string? @default = null, string? defaultName = null,
+        bool systemNamed = false, string? computed = null, string? collation = null, string? typeSchema = null) =>
+        new(name, new RawType(type, typeSchema, length, 18, 2), nullable, identity, identity ? "1" : null, identity ? "1" : null, defaultName, @default, systemNamed, computed, computed is not null, collation);
+
+    [Fact]
+    public void A_table_is_written_from_what_the_catalog_says()
+    {
+        var detail = new CatalogDetail
+        {
+            Object = new CatalogObject(1, "Table", "dbo", "Order Item", "U", null, null, 10, 8),
+            Columns =
+            [
+                Column("Id", "int", identity: true),
+                Column("Code", "varchar", 20, collation: "Latin1_General_BIN"),
+                Column("Note", "nvarchar", -1, nullable: true, collation: "Latin1_General_CI_AS"),
+                Column("Price", "decimal", 9, @default: "((0))", defaultName: "DF_Price"),
+                Column("At", "datetime", 8, @default: "(getdate())", defaultName: "DF__Order__At__1A2B3C", systemNamed: true),
+                Column("Kind", "OrderKind", 1, typeSchema: "dbo"),
+                Column("Total", "decimal", computed: "([Price]*(2))")
+            ],
+            Indexes =
+            [
+                new CatalogIndex("PK_OrderItem", "CLUSTERED", true, true, false, false, null, [new("Id", false, false)]),
+                new CatalogIndex("UQ_Code", "NONCLUSTERED", true, false, true, false, null, [new("Code", false, false)]),
+                new CatalogIndex("IX_At", "NONCLUSTERED", false, false, false, false, "([At] IS NOT NULL)", [new("At", true, false), new("Kind", false, false), new("Price", false, true)])
+            ],
+            Checks = [new CatalogCheck("CK_Price", "([Price]>=(0))", false)],
+            ForeignKeys = [new CatalogForeignKey("FK_Order", ["OrderId", "Line"], "dbo", "Order", ["Id", "Line"], "CASCADE", "NO_ACTION", true)],
+            Triggers = [new CatalogTrigger("trItem", false, false, "CREATE TRIGGER dbo.trItem ON dbo.[Order Item] AFTER INSERT AS SET NOCOUNT ON\r\n")]
+        };
+
+        Assert.Equal("""
+            CREATE TABLE [dbo].[Order Item] (
+                [Id] int IDENTITY(1, 1) NOT NULL,
+                [Code] varchar(20) COLLATE Latin1_General_BIN NOT NULL,
+                [Note] nvarchar(max) NULL,
+                [Price] decimal(18, 2) NOT NULL CONSTRAINT [DF_Price] DEFAULT ((0)),
+                [At] datetime NOT NULL DEFAULT (getdate()),
+                [Kind] [dbo].[OrderKind] NOT NULL,
+                [Total] AS ([Price]*(2)) PERSISTED,
+                CONSTRAINT [PK_OrderItem] PRIMARY KEY CLUSTERED ([Id] ASC),
+                CONSTRAINT [UQ_Code] UNIQUE NONCLUSTERED ([Code] ASC),
+                CONSTRAINT [CK_Price] CHECK ([Price]>=(0)),
+                CONSTRAINT [FK_Order] FOREIGN KEY ([OrderId], [Line]) REFERENCES [dbo].[Order] ([Id], [Line]) ON DELETE CASCADE
+            );
+            GO
+
+            CREATE NONCLUSTERED INDEX [IX_At] ON [dbo].[Order Item] ([At] DESC, [Kind] ASC) INCLUDE ([Price]) WHERE ([At] IS NOT NULL);
+            GO
+
+            ALTER TABLE [dbo].[Order Item] NOCHECK CONSTRAINT [FK_Order];
+            GO
+
+            CREATE TRIGGER dbo.trItem ON dbo.[Order Item] AFTER INSERT AS SET NOCOUNT ON
+
+            """.ReplaceLineEndings("\n"), SqlScript.Table(detail, "Latin1_General_CI_AS"));
+    }
+
+    [Fact]
+    public void Types_are_written_too()
+    {
+        var list = new CatalogDetail
+        {
+            Object = new CatalogObject(6, "Type", "dbo", "OrderList", "TT", null, null, null, null),
+            Columns = [Column("Id", "int"), Column("Code", "varchar", 20, nullable: true)],
+            Indexes = [new CatalogIndex("PK__x", "CLUSTERED", true, true, false, false, null, [new("Id", false, false)])]
+        };
+        Assert.Equal("CREATE TYPE [dbo].[OrderList] AS TABLE (\n    [Id] int NOT NULL,\n    [Code] varchar(20) NULL,\n    PRIMARY KEY CLUSTERED ([Id] ASC)\n);\n", SqlScript.TableType(list, null));
+        Assert.Equal("CREATE TYPE [dbo].[Code] FROM varchar(20) NOT NULL;\n", SqlScript.ScalarType(new CatalogObject(7, "Type", "dbo", "Code", "T", null, null, null, null), "varchar(20)", false));
+    }
+
+    [Fact]
+    public void The_defaults_of_the_parameters_are_read_from_the_text()
+    {
+        const string text = """
+            -- @Old int = 99 was here once
+            CREATE PROCEDURE [dbo].[spCloseOrders]
+                @Period varchar(7),
+                @User nvarchar(50) = N'system, the', /* @Fake int = 5 */
+                @Limit decimal(18, 2) = 10.5,
+                @When datetime = NULL,
+                @Rows int = 0 OUTPUT,
+                @Flag bit
+            WITH RECOMPILE
+            AS
+            BEGIN
+                DECLARE @Flag2 int = 7, @Period2 varchar(7) = 'x'
+                SET @Flag = 1
+            END
+            """;
+
+        var defaults = SqlScript.ParameterDefaults(text, ["@Period", "@User", "@Limit", "@When", "@Rows", "@Flag"]);
+
+        Assert.Equal(new Dictionary<string, string> { ["@User"] = "N'system, the'", ["@Limit"] = "10.5", ["@When"] = "NULL", ["@Rows"] = "0" }, defaults);
+        Assert.Empty(SqlScript.ParameterDefaults(null, ["@a"]));
+        Assert.Equal("(1)", SqlScript.ParameterDefaults("CREATE FUNCTION f (@a int = (1), @b int) RETURNS int AS BEGIN RETURN @a END", ["@a", "@b"])["@a"]);
+    }
+
+    [Fact]
+    public void The_fingerprint_does_not_change_with_line_endings_or_trailing_blanks()
+    {
+        var one = SqlScript.Fingerprint("CREATE VIEW v AS\r\n  SELECT 1   \r\n\r\n");
+        Assert.Equal(one, SqlScript.Fingerprint("\nCREATE VIEW v AS\n  SELECT 1\n"));
+        Assert.NotEqual(one, SqlScript.Fingerprint("CREATE VIEW v AS\n  SELECT 2\n"));
+        Assert.Equal(64, one.Length);
+    }
+
+    [Fact]
+    public void The_objects_are_given_a_page_at_a_time_with_what_there_is_of_each_kind()
+    {
+        var all = new PretendInstance().Catalog;
+
+        var page = DatabaseAnswers.Objects("Sales", all, DateTimeOffset.UnixEpoch, kind: "Table", schema: null, search: "o", sort: "rows", limit: 1, offset: 0);
+
+        Assert.Equal(2, page.Value<int>("Total"));
+        Assert.Equal("Orders", Assert.Single(page["Objects"]!).Value<string>("Name"));
+        // How many of each kind match the search, whichever kind is being looked at.
+        Assert.Equal([2, 1, 1, 1, 1], page["Kinds"]!.Select(item => item.Value<int>("Count")));
+        Assert.Equal(["audit", "dbo"], page["Schemas"]!.Select(item => item.Value<string>("Schema")));
+
+        var audited = DatabaseAnswers.Objects("Sales", all, DateTimeOffset.UnixEpoch, null, "AUDIT", null, null, 100, 0);
+        Assert.Equal("fncOrdersOf", Assert.Single(audited["Objects"]!).Value<string>("Name"));
+        Assert.Equal("vwOrders", DatabaseAnswers.Objects("Sales", all, DateTimeOffset.UnixEpoch, null, null, "dbo.vw", "modified", 100, 0)["Objects"]![0]!.Value<string>("Name"));
+    }
+
     [Fact]
     public void The_product_is_named_shortly() =>
         Assert.Equal("SQL Server 2019", SqlServerSource.Product("Microsoft SQL Server 2019 (RTM-CU18) (KB5017593) - 15.0.4261.1 (X64) \n\tSep 12 2022"));
@@ -446,6 +638,15 @@ public class DatabaseAdminTests
 
         var queries = await rig.CommandAsync("DatabaseQueries");
         Assert.Equal("dbo.GetOrders", queries!["Queries"]![0]!.Value<string>("Object"));
+
+        var objects = await rig.CommandAsync("DatabaseObjects", request => request["Kind"] = "View");
+        Assert.Equal(("Sales", 1), (objects!.Value<string>("Database"), objects.Value<int>("Total")));
+        var view = await rig.CommandAsync("DatabaseObject", request => { request["Kind"] = "View"; request["Schema"] = "dbo"; request["Name"] = "vwOrders"; });
+        Assert.Equal("CREATE vwOrders", view!.Value<string>("Script"));
+        Assert.Equal("vwOrders", view["Object"]!.Value<string>("Name"));
+        Assert.Equal(64, view.Value<string>("Fingerprint")!.Length);
+        var other = await rig.CommandAsync("DatabaseObjects", request => request["Database"] = "Payroll");
+        Assert.Equal("not-found", other!["Error"]!.Value<string>("Code"));
     }
 
     [Fact]

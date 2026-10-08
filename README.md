@@ -291,6 +291,11 @@ databases, disks, backups, jobs and the statements that cost the most. Only SQL 
   and costly statements. An instance is often shared with other environments. Without it, all
   the databases are. The costly statements never include what runs in the system databases,
   which is where monitors (this one too) ask their questions.
+- The objects of the databases named can be listed too: tables, views, procedures, functions and
+  user-defined types, each with its columns or parameters, indexes, constraints, what it uses,
+  who uses it and the script that creates it. The script of a view, procedure or function is the
+  text the instance keeps; the one of a table or type is written from the catalog. Each comes
+  with a fingerprint of its script. A database that is not named is refused.
 - `BackupHours` zero does not look at backups. The history of the charts is kept in `database.db`.
 
 ## ⚙️ Installation

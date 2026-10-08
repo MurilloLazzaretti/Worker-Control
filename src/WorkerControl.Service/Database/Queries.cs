@@ -146,4 +146,151 @@ internal static class Queries
         CROSS APPLY sys.dm_exec_sql_text(q.sql_handle) t
         WHERE q.by_cpu <= 25 OR q.by_time <= 25 OR q.by_reads <= 25
         """;
+
+    // ---------------------------------------------------------------- the objects of a database
+    //
+    // Run with the database as the one of the connection. Dates are given in universal time.
+
+    private const string Utc = "DATEDIFF(MINUTE, GETDATE(), GETUTCDATE())";
+
+    public const string Collation = "SELECT CONVERT(nvarchar(128), DATABASEPROPERTYEX(DB_NAME(), 'Collation'))";
+
+    /// <summary>
+    /// Tables, views, procedures and functions. Rows and size come from what the instance
+    /// counts by itself, without looking at the table.
+    /// </summary>
+    public const string Objects = $"""
+        SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type),
+               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, o.modify_date),
+               (SELECT SUM(p.row_count) FROM sys.dm_db_partition_stats p WHERE p.object_id = o.object_id AND p.index_id IN (0, 1)),
+               (SELECT SUM(p.reserved_page_count) * 8 FROM sys.dm_db_partition_stats p WHERE p.object_id = o.object_id)
+        FROM sys.objects o
+        WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+        """;
+
+    /// <summary>
+    /// The same without rows and sizes, for a user that may not read them.
+    /// </summary>
+    public const string ObjectsPlain = $"""
+        SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type),
+               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, o.modify_date), NULL, NULL
+        FROM sys.objects o
+        WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+        """;
+
+    public const string Types = $"""
+        SELECT t.user_type_id, SCHEMA_NAME(t.schema_id), t.name, CASE WHEN t.is_table_type = 1 THEN 'TT' ELSE 'T' END,
+               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, o.modify_date), NULL, NULL
+        FROM sys.types t
+        LEFT JOIN sys.table_types tt ON tt.user_type_id = t.user_type_id
+        LEFT JOIN sys.objects o ON o.object_id = tt.type_table_object_id
+        WHERE t.is_user_defined = 1
+        """;
+
+    /// <summary>
+    /// A type that is not a table: what it is made from. And the table behind one that is.
+    /// </summary>
+    public const string TypeBase = """
+        SELECT b.name, t.max_length, t.precision, t.scale, t.is_nullable, tt.type_table_object_id
+        FROM sys.types t
+        LEFT JOIN sys.types b ON b.user_type_id = t.system_type_id AND b.is_user_defined = 0
+        LEFT JOIN sys.table_types tt ON tt.user_type_id = t.user_type_id
+        WHERE t.user_type_id = @id
+        """;
+
+    public const string Columns = """
+        SELECT c.name, t.name, CASE WHEN t.is_user_defined = 1 THEN SCHEMA_NAME(t.schema_id) END, c.max_length, c.precision, c.scale,
+               c.is_nullable, c.is_identity, CONVERT(nvarchar(40), ic.seed_value), CONVERT(nvarchar(40), ic.increment_value),
+               d.name, d.definition, d.is_system_named, cc.definition, ISNULL(cc.is_persisted, 0), c.collation_name
+        FROM sys.columns c
+        JOIN sys.types t ON t.user_type_id = c.user_type_id
+        LEFT JOIN sys.identity_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        LEFT JOIN sys.default_constraints d ON d.object_id = c.default_object_id
+        LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id
+        WHERE c.object_id = @id
+        ORDER BY c.column_id
+        """;
+
+    /// <summary>
+    /// The parameter numbered zero is what a function gives back.
+    /// </summary>
+    public const string Parameters = """
+        SELECT p.parameter_id, p.name, t.name, CASE WHEN t.is_user_defined = 1 THEN SCHEMA_NAME(t.schema_id) END, p.max_length, p.precision, p.scale,
+               p.is_output, p.is_readonly
+        FROM sys.parameters p
+        JOIN sys.types t ON t.user_type_id = p.user_type_id
+        WHERE p.object_id = @id
+        ORDER BY p.parameter_id
+        """;
+
+    public const string Definition = "SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = @id";
+
+    public const string Indexes = """
+        SELECT i.index_id, i.name, i.type_desc, i.is_unique, i.is_primary_key, i.is_unique_constraint, i.is_disabled, i.filter_definition,
+               c.name, ic.is_descending_key, ic.is_included_column
+        FROM sys.indexes i
+        JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+        JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+        WHERE i.object_id = @id AND i.type > 0 AND i.is_hypothetical = 0
+        ORDER BY i.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id
+        """;
+
+    public const string ForeignKeys = """
+        SELECT fk.name, pc.name, SCHEMA_NAME(rt.schema_id), rt.name, rc.name,
+               fk.delete_referential_action_desc, fk.update_referential_action_desc, fk.is_disabled
+        FROM sys.foreign_keys fk
+        JOIN sys.foreign_key_columns k ON k.constraint_object_id = fk.object_id
+        JOIN sys.columns pc ON pc.object_id = k.parent_object_id AND pc.column_id = k.parent_column_id
+        JOIN sys.columns rc ON rc.object_id = k.referenced_object_id AND rc.column_id = k.referenced_column_id
+        JOIN sys.objects rt ON rt.object_id = fk.referenced_object_id
+        WHERE fk.parent_object_id = @id
+        ORDER BY fk.name, k.constraint_column_id
+        """;
+
+    public const string Checks = """
+        SELECT k.name, k.definition, k.is_disabled
+        FROM sys.check_constraints k
+        WHERE k.parent_object_id = @id
+        ORDER BY k.name
+        """;
+
+    public const string Triggers = """
+        SELECT t.name, t.is_disabled, t.is_instead_of_trigger, m.definition
+        FROM sys.triggers t
+        LEFT JOIN sys.sql_modules m ON m.object_id = t.object_id
+        WHERE t.parent_id = @id
+        ORDER BY t.name
+        """;
+
+    /// <summary>
+    /// What the object names in its text. What it names in another database, or what is not
+    /// there any more, comes without a kind.
+    /// </summary>
+    public const string Uses = """
+        SELECT DISTINCT ISNULL(d.referenced_schema_name, ISNULL(SCHEMA_NAME(o.schema_id), SCHEMA_NAME(t.schema_id))), d.referenced_entity_name,
+               CASE WHEN d.referenced_class = 6 THEN CASE WHEN t.is_table_type = 1 THEN 'TT' ELSE 'T' END ELSE RTRIM(o.type) END,
+               d.referenced_database_name
+        FROM sys.sql_expression_dependencies d
+        LEFT JOIN sys.objects o ON o.object_id = d.referenced_id AND d.referenced_class = 1
+        LEFT JOIN sys.types t ON t.user_type_id = d.referenced_id AND d.referenced_class = 6
+        WHERE d.referencing_id = @id AND d.referenced_entity_name IS NOT NULL
+        """;
+
+    public const string UsedBy = """
+        SELECT DISTINCT SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type), CAST(NULL AS nvarchar(128))
+        FROM sys.sql_expression_dependencies d
+        JOIN sys.objects o ON o.object_id = d.referencing_id
+        WHERE d.referenced_id = @id AND d.referenced_class = 1 AND o.is_ms_shipped = 0
+        """;
+
+    /// <summary>
+    /// Who uses a type: the tables with a column of it and whatever takes a parameter of it.
+    /// </summary>
+    public const string TypeUsedBy = """
+        SELECT DISTINCT SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type), CAST(NULL AS nvarchar(128))
+        FROM sys.objects o
+        WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+          AND (EXISTS (SELECT 1 FROM sys.columns c WHERE c.object_id = o.object_id AND c.user_type_id = @id)
+               OR EXISTS (SELECT 1 FROM sys.parameters p WHERE p.object_id = o.object_id AND p.user_type_id = @id))
+        """;
 }
