@@ -198,6 +198,7 @@ internal sealed class ProcessInspector : IProcessInspector
             // What the process started counts as part of it: a service installed through a
             // wrapper is the wrapper, and the program that matters is its child.
             var children = new List<string>();
+            var childIds = new List<int>();
             foreach (var id in OperatingSystem.IsWindows() ? ProcessTree.Descendants(processId) : [])
             {
                 try
@@ -211,13 +212,14 @@ internal sealed class ProcessInspector : IProcessInspector
                     threads += child.Threads.Count;
                     handles += child.HandleCount;
                     children.Add(child.ProcessName);
+                    childIds.Add(id);
                 }
                 catch (Exception error) when (error is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException)
                 {
                     // Gone, or not ours to read.
                 }
             }
-            return new ProcessInfo(started, processor, memory, threads, handles, children.Count == 0 ? null : children);
+            return new ProcessInfo(started, processor, memory, threads, handles, children.Count == 0 ? null : children, childIds.Count == 0 ? null : childIds);
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException)
         {

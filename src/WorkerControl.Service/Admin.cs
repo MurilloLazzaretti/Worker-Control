@@ -62,6 +62,8 @@ internal static class Admin
             ["Handles"] = status.Process?.Handles,
             // The programs the service started, which are measured with it.
             ["Children"] = status.Process?.Children is { } children ? new JArray(children) : null,
+            // The service and everything it started: any of them may be what talks to the broker.
+            ["ProcessIds"] = service is { ProcessId: > 0 } ? new JArray(new[] { service.ProcessId }.Concat(status.Process?.ChildIds ?? [])) : new JArray(),
             ["AutoRestart"] = status.Config.AutoRestart,
             ["RestartingAt"] = status.RestartingAt,
             ["Restarting"] = status.Restarting,

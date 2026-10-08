@@ -45,6 +45,14 @@ public static class ServiceHost
             writeToProviders: true);
 
         builder.Services.AddSingleton(TimeProvider.System);
+        // Who listens on which port, to tell what is behind the reverse proxy.
+        if (!builder.Services.Any(service => service.ServiceType == typeof(Traffic.IMachineNetwork)))
+        {
+            if (OperatingSystem.IsWindows())
+                builder.Services.AddSingleton<Traffic.IMachineNetwork, Traffic.WindowsMachineNetwork>();
+            else
+                builder.Services.AddSingleton<Traffic.IMachineNetwork, Traffic.NoMachineNetwork>();
+        }
         // The services of the machine, which only Windows has. A test may put its own first.
         if (!builder.Services.Any(service => service.ServiceType == typeof(IServiceManager)))
         {

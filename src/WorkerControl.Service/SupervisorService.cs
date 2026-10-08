@@ -12,7 +12,7 @@ namespace WorkerControl.Service;
 /// second, records what happens and answers whoever administers the service. When the service
 /// stops, it stops the workers too.
 /// </summary>
-internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services) : BackgroundService
+internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network) : BackgroundService
 {
     /// <summary>
     /// A file of this name in the data folder when the service stops means: leave the workers
@@ -354,6 +354,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     _broker?.HealthySince(time.GetUtcNow() - TimeSpan.FromSeconds(10)) ?? false, _lastHealth, _watcher!.GetStatus());
 
             case "Traffic" when _traffic is null:
+            case "TrafficUpstreams" when _traffic is null:
             case "TrafficRoutes" when _traffic is null:
             case "TrafficPages" when _traffic is null:
             case "TrafficErrors" when _traffic is null:
@@ -369,6 +370,12 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             {
                 var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
                 return TrafficAnswers.Routes(_traffic!.Store, from, to, TrafficAnswers.Filter(request), request.Value<string>("Search"), request.Value<string>("Sort"), request.Value<int?>("Limit") ?? 100);
+            }
+
+            case "TrafficUpstreams":
+            {
+                var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
+                return TrafficAnswers.Upstreams(_traffic!.Store, network, from, to);
             }
 
             case "TrafficPages":

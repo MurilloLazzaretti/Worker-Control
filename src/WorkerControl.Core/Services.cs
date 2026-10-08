@@ -91,7 +91,7 @@ public interface IServiceManager
 /// starts the program that does the work. <see cref="Children"/> are the names of the
 /// processes it started, when there are any.
 /// </summary>
-public sealed record ProcessInfo(DateTimeOffset StartTime, TimeSpan ProcessorTime, long MemoryBytes, int Threads, int Handles, IReadOnlyList<string>? Children = null);
+public sealed record ProcessInfo(DateTimeOffset StartTime, TimeSpan ProcessorTime, long MemoryBytes, int Threads, int Handles, IReadOnlyList<string>? Children = null, IReadOnlyList<int>? ChildIds = null);
 
 public interface IProcessInspector
 {

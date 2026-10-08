@@ -127,6 +127,30 @@ internal static class TrafficAnswers
     });
 
     /// <summary>
+    /// Where the reverse proxy sent the requests of a period, and who is behind each address:
+    /// what joins the traffic to the processes of the machine.
+    /// </summary>
+    public static JObject Upstreams(TrafficStore store, IMachineNetwork machine, DateTimeOffset from, DateTimeOffset to) => Admin.Ok(answer =>
+    {
+        var rows = store.Query(from, to, new TrafficFilter(), ["upstream", "app"]).Where(row => ((string)row.Group[0]).Length > 0).ToList();
+        var owners = UpstreamResolver.Resolve(rows.Select(row => (string)row.Group[0]), machine).ToDictionary(owner => owner.Upstream, StringComparer.Ordinal);
+
+        answer["From"] = from;
+        answer["To"] = to;
+        answer["Minutes"] = Math.Max(1, (to - from).TotalMinutes);
+        answer["Upstreams"] = new JArray(rows.Select(row =>
+        {
+            var upstream = Describe(row.Tally, null);
+            upstream["Upstream"] = (string)row.Group[0];
+            upstream["App"] = (string)row.Group[1];
+            var owner = owners.GetValueOrDefault((string)row.Group[0]);
+            upstream["Site"] = owner?.Site;
+            upstream["Processes"] = new JArray((owner?.Processes ?? []).Select(process => new JObject { ["ProcessId"] = process.ProcessId, ["Name"] = process.Name }));
+            return upstream;
+        }));
+    });
+
+    /// <summary>
     /// The screens the requests came from and, for each name given, how much the screens
     /// under that name were used.
     /// </summary>
