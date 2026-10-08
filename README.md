@@ -176,6 +176,29 @@ All optional. The ones marked "root or group" may be given once at the root, for
 
 Management Studio 1.x writes the file with the settings it knows. Saving from it drops the new ones.
 
+### Windows services
+
+Services of the machine that are not started by Worker Control can be watched by it: state, uptime, processor and memory, an optional check, and start, stop and restart from the panel. They are chosen in the panel, from the list of what is installed; what is chosen is written here:
+
+```json
+"Services": {
+  "SuggestFrom": ["D:\\Apps"],
+  "Items": [
+    { "Name": "MyService" },
+    { "Name": "OtherService", "AutoRestart": true, "StopTimeoutMs": 30000, "Check": { "Tcp": "localhost:9100" } }
+  ]
+}
+```
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `SuggestFrom` | none | Folders whose services are offered first to whoever is choosing |
+| `Name` | | The name of the service in Windows (the short one) |
+| `AutoRestart` | false | Starts the service again when it stops by itself with an error, waiting longer each time it happens in a row. A service somebody stopped stays stopped |
+| `StopTimeoutMs` | 30000 | How long a service asked to stop is waited for. After that the panel says so; the service is not ended by force |
+| `Check` | none | `Tcp` (a host and port that has to take a connection) or `Url` (an address that has to answer 2xx), tried every 15 seconds while the service runs |
+| `LogFiles` | none | Folder and file name pattern of the log of the service |
+
 ## ⚙️ Installation
 
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.

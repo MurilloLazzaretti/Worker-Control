@@ -38,6 +38,12 @@ public sealed class Rig : IAsyncDisposable
 
     public int Port { get; }
 
+    /// <summary>
+    /// The services of the machine as the service under test is to see them. Set before it
+    /// starts; without it, the ones the machine really has (none, outside Windows).
+    /// </summary>
+    public WorkerControl.Core.IServiceManager? Services { get; set; }
+
     public string Directory { get; }
 
     public HttpClient Http { get; }
@@ -76,8 +82,14 @@ public sealed class Rig : IAsyncDisposable
           "StartBatchSize": 10,
           "StartBatchIntervalMs": 100,
           "WorkerGroups": [ {{string.Join(",", groups)}} ]
+          {{(ServicesJson is null ? "" : ", \"Services\": " + ServicesJson)}}
         }
         """);
+
+    /// <summary>
+    /// The "Services" section of the configuration file, when the test wants one.
+    /// </summary>
+    public string? ServicesJson { get; set; }
 
     public async Task StartBrokerAsync()
     {
@@ -103,12 +115,17 @@ public sealed class Rig : IAsyncDisposable
 
     public async Task StartServiceAsync()
     {
-        _service = ServiceHost.Build([], builder => builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        _service = ServiceHost.Build([], builder =>
         {
-            ["WorkerControl:DataDirectory"] = Directory,
-            ["WorkerControl:TickMilliseconds"] = "50",
-            ["WorkerControl:HealthSampleSeconds"] = "1"
-        }));
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkerControl:DataDirectory"] = Directory,
+                ["WorkerControl:TickMilliseconds"] = "50",
+                ["WorkerControl:HealthSampleSeconds"] = "1"
+            });
+            if (Services is not null)
+                builder.Services.AddSingleton(Services);
+        });
         await _service.StartAsync();
 
         // A host that is run, as the real service is, stops when the application asks to.

@@ -36,6 +36,11 @@ public sealed record WorkerControlConfig
     public TimeSpan HealthRetention { get; init; } = TimeSpan.FromHours(24);
 
     public IReadOnlyList<GroupConfig> Groups { get; init; } = [];
+
+    /// <summary>
+    /// Windows services that are watched without being started from here.
+    /// </summary>
+    public ServicesConfig Services { get; init; } = new();
 }
 
 public sealed record GroupConfig
@@ -260,7 +265,8 @@ public static class ConfigReader
                 StartBatchInterval = Milliseconds(root, "StartBatchIntervalMs", "", TimeSpan.FromSeconds(2), minimum: 0),
                 EventRetention = TimeSpan.FromDays(Integer(root, "EventRetentionDays", "", defaultValue: 30, minimum: 1)),
                 HealthRetention = TimeSpan.FromHours(Integer(root, "HealthRetentionHours", "", defaultValue: 24, minimum: 1)),
-                Groups = ReadGroups(root, general)
+                Groups = ReadGroups(root, general),
+                Services = ReadServices(root)
             };
             return config;
         }
@@ -311,6 +317,70 @@ public static class ConfigReader
             });
         }
         return groups;
+    }
+
+    private static ServicesConfig ReadServices(JsonElement root)
+    {
+        if (!root.TryGetProperty("Services", out var services) || services.ValueKind == JsonValueKind.Null)
+            return new ServicesConfig();
+        if (services.ValueKind != JsonValueKind.Object)
+            throw new ConfigException("\"Services\" must be an object");
+
+        var folders = new List<string>();
+        if (services.TryGetProperty("SuggestFrom", out var suggest) && suggest.ValueKind != JsonValueKind.Null)
+        {
+            if (suggest.ValueKind != JsonValueKind.Array || suggest.EnumerateArray().Any(folder => folder.ValueKind != JsonValueKind.String))
+                throw new ConfigException("\"SuggestFrom\" must be a list of folders in \"Services\"");
+            folders.AddRange(suggest.EnumerateArray().Select(folder => folder.GetString()!.Trim()).Where(folder => folder.Length > 0));
+        }
+
+        var items = new List<MonitoredServiceConfig>();
+        if (services.TryGetProperty("Items", out var array) && array.ValueKind != JsonValueKind.Null)
+        {
+            if (array.ValueKind != JsonValueKind.Array)
+                throw new ConfigException("\"Items\" must be a list in \"Services\"");
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in array.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    throw new ConfigException("Every item of \"Services\" must be an object");
+                var name = Text(item, "Name", "a service")?.Trim();
+                if (string.IsNullOrEmpty(name))
+                    throw new ConfigException("Every service needs a \"Name\"");
+                if (!names.Add(name))
+                    throw new ConfigException($"The service \"{name}\" is listed twice");
+
+                var where = $"service \"{name}\"";
+                items.Add(new MonitoredServiceConfig
+                {
+                    Name = name,
+                    AutoRestart = Boolean(item, "AutoRestart", where, defaultValue: false),
+                    StopTimeout = Milliseconds(item, "StopTimeoutMs", where, TimeSpan.FromSeconds(30), minimum: 1000),
+                    LogFiles = Text(item, "LogFiles", where) is { Length: > 0 } files ? files : null,
+                    Check = ReadCheck(item, where)
+                });
+            }
+        }
+        return new ServicesConfig { SuggestFrom = folders, Items = items };
+    }
+
+    private static ServiceCheck? ReadCheck(JsonElement service, string where)
+    {
+        if (!service.TryGetProperty("Check", out var check) || check.ValueKind == JsonValueKind.Null)
+            return null;
+        if (check.ValueKind != JsonValueKind.Object)
+            throw new ConfigException($"\"Check\" must be an object in {where}");
+
+        where = "the check of " + where;
+        var tcp = Text(check, "Tcp", where) is { Length: > 0 } address ? address.Trim() : null;
+        var url = Text(check, "Url", where) is { Length: > 0 } link ? link.Trim() : null;
+        if ((tcp is null) == (url is null))
+            throw new ConfigException($"Give either \"Tcp\" or \"Url\" in {where}");
+        if (tcp is not null && (tcp.LastIndexOf(':') is var colon && (colon <= 0 || !int.TryParse(tcp[(colon + 1)..], out var port) || port is < 1 or > 65535)))
+            throw new ConfigException($"\"Tcp\" must be a host and a port, like localhost:8080, in {where}");
+        if (url is not null && !(Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"))
+            throw new ConfigException($"\"Url\" must be an http or https address in {where}");
+        return new ServiceCheck(tcp, url);
     }
 
     private static BoostConfig ReadBoost(JsonElement group, string where)

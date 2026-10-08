@@ -9,7 +9,7 @@ namespace WorkerControl.Service;
 /// </summary>
 internal static class Admin
 {
-    public const int ContractVersion = 1;
+    public const int ContractVersion = 2;
 
     public static JObject Ok(Action<JObject>? more = null)
     {
@@ -25,7 +25,7 @@ internal static class Admin
     };
 
     public static JObject Status(IReadOnlyList<GroupStatus> groups, DateTimeOffset startedAt, string zapMQHost, int zapMQPort, bool brokerHealthy,
-        IReadOnlyDictionary<int, StoredHealth> lastHealth) => Ok(answer =>
+        IReadOnlyDictionary<int, StoredHealth> lastHealth, IReadOnlyList<MonitoredServiceStatus> services) => Ok(answer =>
     {
         answer["Version"] = ServiceHost.Version;
         answer["Contract"] = ContractVersion;
@@ -37,7 +37,71 @@ internal static class Admin
             ["ZapMQ"] = new JObject { ["Host"] = zapMQHost, ["Port"] = zapMQPort, ["Healthy"] = brokerHealthy }
         };
         answer["Groups"] = new JArray(groups.Select(group => Describe(group, lastHealth)));
+        answer["Services"] = new JArray(services.Select(service => Describe(service, lastHealth)));
     });
+
+    private static JObject Describe(MonitoredServiceStatus status, IReadOnlyDictionary<int, StoredHealth> lastHealth)
+    {
+        var service = status.Service;
+        StoredHealth? health = null;
+        if (service is { ProcessId: > 0 })
+            lastHealth.TryGetValue(service.ProcessId, out health);
+        return new JObject
+        {
+            ["Name"] = status.Config.Name,
+            ["DisplayName"] = service?.DisplayName,
+            ["ExecutablePath"] = service?.ExecutablePath,
+            ["State"] = status.State.ToString(),
+            ["StartType"] = service?.StartType,
+            ["ProcessId"] = service is { ProcessId: > 0 } ? service.ProcessId : null,
+            ["StartedAt"] = status.Process?.StartTime,
+            ["ExitCode"] = status.State == ServiceState.Stopped ? service?.ExitCode : null,
+            ["CpuPercent"] = health?.CpuPercent,
+            ["MemoryBytes"] = status.Process?.MemoryBytes,
+            ["Threads"] = status.Process?.Threads,
+            ["Handles"] = status.Process?.Handles,
+            ["AutoRestart"] = status.Config.AutoRestart,
+            ["RestartingAt"] = status.RestartingAt,
+            ["Restarting"] = status.Restarting,
+            ["Unstable"] = status.Unstable,
+            ["IsSupervisor"] = status.IsSupervisor,
+            ["HasLog"] = status.Config.LogFiles is not null,
+            ["Check"] = status.Config.Check is { } check
+                ? new JObject { ["Target"] = check.Tcp ?? check.Url, ["Ok"] = status.CheckOk, ["Detail"] = status.CheckDetail, ["At"] = status.CheckedAt }
+                : null
+        };
+    }
+
+    /// <summary>
+    /// The services of the machine, for whoever is choosing which to watch: the ones from the
+    /// suggested folders first, then the rest, and those of Windows itself last.
+    /// </summary>
+    public static JObject Installed(IReadOnlyList<InstalledService> services, IReadOnlyList<string> suggestFrom, IReadOnlySet<string> watched)
+    {
+        var system = new[] { Environment.GetFolderPath(Environment.SpecialFolder.Windows) }.Where(folder => folder.Length > 0).ToList();
+        return Ok(answer =>
+        {
+            answer["SuggestFrom"] = new JArray(suggestFrom);
+            answer["Services"] = new JArray(services
+                .Select(service => (Service: service,
+                    Suggested: ServiceCommandLine.IsUnder(service.ExecutablePath, suggestFrom),
+                    System: ServiceCommandLine.IsUnder(service.ExecutablePath, system)))
+                .OrderByDescending(item => item.Suggested)
+                .ThenBy(item => item.System)
+                .ThenBy(item => item.Service.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                .Select(item => new JObject
+                {
+                    ["Name"] = item.Service.Name,
+                    ["DisplayName"] = item.Service.DisplayName,
+                    ["ExecutablePath"] = item.Service.ExecutablePath,
+                    ["State"] = item.Service.State.ToString(),
+                    ["StartType"] = item.Service.StartType,
+                    ["Suggested"] = item.Suggested,
+                    ["System"] = item.System,
+                    ["Watched"] = watched.Contains(item.Service.Name)
+                }));
+        });
+    }
 
     private static JObject Describe(GroupStatus group, IReadOnlyDictionary<int, StoredHealth> lastHealth)
     {

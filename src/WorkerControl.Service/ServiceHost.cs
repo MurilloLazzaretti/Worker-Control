@@ -1,6 +1,7 @@
 using System.Reflection;
 using Serilog;
 using Serilog.Events;
+using WorkerControl.Core;
 
 namespace WorkerControl.Service;
 
@@ -44,6 +45,14 @@ public static class ServiceHost
             writeToProviders: true);
 
         builder.Services.AddSingleton(TimeProvider.System);
+        // The services of the machine, which only Windows has. A test may put its own first.
+        if (!builder.Services.Any(service => service.ServiceType == typeof(IServiceManager)))
+        {
+            if (OperatingSystem.IsWindows())
+                builder.Services.AddSingleton<IServiceManager, WindowsServiceManager>();
+            else
+                builder.Services.AddSingleton<IServiceManager, NoServiceManager>();
+        }
         builder.Services.AddHostedService<SupervisorService>();
 
         var host = builder.Build();

@@ -11,7 +11,7 @@ namespace WorkerControl.Service;
 /// second, records what happens and answers whoever administers the service. When the service
 /// stops, it stops the workers too.
 /// </summary>
-internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime) : BackgroundService
+internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services) : BackgroundService
 {
     /// <summary>
     /// A file of this name in the data folder when the service stops means: leave the workers
@@ -37,6 +37,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private Supervisor? _supervisor;
     private ZapMQBroker? _broker;
     private TraceRelay? _trace;
+    private ServiceWatcher? _watcher;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -59,8 +60,14 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         supervisor.Event += Record;
         _supervisor = supervisor;
 
+        using var probe = new ServiceProbe();
+        var monitored = new ServiceWatcher(services, new ProcessInspector(), probe, time, Environment.ProcessId);
+        monitored.Event += Record;
+        _watcher = monitored;
+
         Record(EventKind.ServiceStarted, $"version {ServiceHost.Version}");
         supervisor.ApplyConfig(config);
+        monitored.ApplyConfig(config.Services);
         supervisor.Adopt(state.Load());
         _logger.LogInformation("Supervising {Groups} groups from {Directory}; ZapMQ at {Host}:{Port}",
             config.Groups.Count, _directory, config.ZapMQHost, config.ZapMQPort);
@@ -81,11 +88,12 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             }
 
             supervisor.Tick();
+            monitored.Tick();
             Save(supervisor, state, ref savedVersion);
 
             if (now >= nextHealth)
             {
-                MeasureHealth(supervisor, now);
+                MeasureHealth(supervisor, monitored, now);
                 nextHealth = now + _healthInterval;
             }
             if (now >= nextPrune)
@@ -206,6 +214,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         _config = config;
         _appliedText = text;
         supervisor.ApplyConfig(config);
+        _watcher?.ApplyConfig(config.Services);
     }
 
     private FileSystemWatcher? WatchConfig()
@@ -244,9 +253,14 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     /// Processor use is the share of one measuring interval the worker spent running, over all
     /// the processors of the machine.
     /// </summary>
-    private void MeasureHealth(Supervisor supervisor, DateTimeOffset now)
+    private void MeasureHealth(Supervisor supervisor, ServiceWatcher watcher, DateTimeOffset now)
     {
-        var samples = supervisor.SampleHealth();
+        // The watched services are measured like the workers; they only have no keep-alive.
+        var samples = supervisor.SampleHealth().Concat(watcher.GetStatus()
+            .Where(service => service is { State: ServiceState.Running, Process: not null, Service.ProcessId: > 0 })
+            .Select(service => new HealthSample(ServiceWatcher.GroupPrefix + service.Config.Name, service.Service!.ProcessId, WorkerState.Up,
+                now - service.Process!.StartTime, new ProcessUsage(service.Process.ProcessorTime, service.Process.MemoryBytes), null)))
+            .ToList();
         var stored = new List<StoredHealth>(samples.Count);
         foreach (var sample in samples)
         {
@@ -319,7 +333,31 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         {
             case "Status":
                 return Admin.Status(supervisor.GetStatus(), _startedAt, _config!.ZapMQHost, _config.ZapMQPort,
-                    _broker?.HealthySince(time.GetUtcNow() - TimeSpan.FromSeconds(10)) ?? false, _lastHealth);
+                    _broker?.HealthySince(time.GetUtcNow() - TimeSpan.FromSeconds(10)) ?? false, _lastHealth, _watcher!.GetStatus());
+
+            case "ListServices":
+            {
+                var watched = _config!.Services.Items.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return Admin.Installed(services.List(), _config.Services.SuggestFrom, watched);
+            }
+
+            case "StartService":
+            case "StopService":
+            case "RestartService":
+            {
+                if (request.Value<string>("Name") is not { Length: > 0 } name)
+                    return Admin.Error("invalid-request", "\"Name\" is required");
+                var result = command switch
+                {
+                    "StartService" => _watcher!.Start(name),
+                    "StopService" => _watcher!.Stop(name),
+                    _ => _watcher!.Restart(name)
+                };
+                if (!result.Ok)
+                    return Admin.Error(result.Code!, result.Message!);
+                Record(EventKind.ManualAction, command switch { "StartService" => "start", "StopService" => "stop", _ => "restart" } + by, ServiceWatcher.GroupPrefix + name);
+                return Admin.Ok();
+            }
 
             case "GetConfig":
             {
@@ -460,7 +498,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         var level = e.Kind switch
         {
             EventKind.WorkerCrashed or EventKind.WorkerHung or EventKind.WorkerStartTimedOut or EventKind.WorkerStartFailed
-                or EventKind.SafeStopTimedOut or EventKind.GroupUnstable or EventKind.ConfigRefused => LogLevel.Warning,
+                or EventKind.SafeStopTimedOut or EventKind.GroupUnstable or EventKind.ConfigRefused
+                or EventKind.MonitoredCrashed or EventKind.MonitoredStopTimedOut or EventKind.MonitoredActionFailed or EventKind.MonitoredCheckFailed => LogLevel.Warning,
             _ => LogLevel.Information
         };
 

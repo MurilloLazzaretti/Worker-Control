@@ -29,7 +29,7 @@ public class AdminTests
 
         Assert.True((bool)status["Ok"]!);
         Assert.Equal(ServiceHost.Version, (string?)status["Version"]);
-        Assert.Equal(1, (int)status["Contract"]!);
+        Assert.Equal(2, (int)status["Contract"]!);
         Assert.Equal(Environment.ProcessId, (int)status["Service"]!["ProcessId"]!);
         Assert.Equal(rig.Port, (int)status["Service"]!["ZapMQ"]!["Port"]!);
 

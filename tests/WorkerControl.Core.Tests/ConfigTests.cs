@@ -179,4 +179,56 @@ public class ConfigTests
 
         Assert.Single(config.Groups);
     }
+
+    private static string WithServices(string services) => $$"""
+        { "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [], "Services": {{services}} }
+        """;
+
+    [Fact]
+    public void Services_to_watch_are_read_with_their_options()
+    {
+        var config = ConfigReader.Parse(WithServices("""
+            {
+              "SuggestFrom": ["D:\\Apps", " "],
+              "Items": [
+                { "Name": "Orders" },
+                { "Name": "Billing", "AutoRestart": true, "StopTimeoutMs": 5000, "LogFiles": "D:\\Apps\\billing\\logs\\*.log", "Check": { "Tcp": "localhost:9100" } },
+                { "Name": "Web", "Check": { "Url": "http://localhost:3000/health" } }
+              ]
+            }
+            """));
+
+        Assert.Equal(["D:\\Apps"], config.Services.SuggestFrom);
+        var orders = config.Services.Items[0];
+        Assert.False(orders.AutoRestart);
+        Assert.Equal(TimeSpan.FromSeconds(30), orders.StopTimeout);
+        Assert.Null(orders.Check);
+        var billing = config.Services.Items[1];
+        Assert.True(billing.AutoRestart);
+        Assert.Equal(TimeSpan.FromSeconds(5), billing.StopTimeout);
+        Assert.Equal("localhost:9100", billing.Check!.Tcp);
+        Assert.EndsWith("*.log", billing.LogFiles);
+        Assert.Equal("http://localhost:3000/health", config.Services.Items[2].Check!.Url);
+    }
+
+    [Fact]
+    public void A_file_without_services_watches_none()
+    {
+        Assert.Empty(ConfigReader.Parse(Legacy).Services.Items);
+    }
+
+    [Theory]
+    [InlineData("""[]""", "must be an object")]
+    [InlineData("""{ "Items": [ { } ] }""", "needs a \"Name\"")]
+    [InlineData("""{ "Items": [ { "Name": "A" }, { "Name": "a" } ] }""", "listed twice")]
+    [InlineData("""{ "Items": [ { "Name": "A", "Check": { } } ] }""", "either \"Tcp\" or \"Url\"")]
+    [InlineData("""{ "Items": [ { "Name": "A", "Check": { "Tcp": "localhost" } } ] }""", "a host and a port")]
+    [InlineData("""{ "Items": [ { "Name": "A", "Check": { "Url": "ftp://x" } } ] }""", "http or https")]
+    [InlineData("""{ "SuggestFrom": "D:\\Apps" }""", "list of folders")]
+    public void Services_that_make_no_sense_are_refused(string services, string complaint)
+    {
+        var error = Assert.Throws<ConfigException>(() => ConfigReader.Parse(WithServices(services)));
+
+        Assert.Contains(complaint, error.Message);
+    }
 }

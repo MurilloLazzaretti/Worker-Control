@@ -126,7 +126,17 @@ public enum EventKind
     ServiceStarted,
     ServiceStopped,
     ConfigRefused,
-    ManualAction
+    ManualAction,
+
+    // About the Windows services that are watched, raised by the service watcher.
+    MonitoredStarted,
+    MonitoredStopped,
+    MonitoredCrashed,
+    MonitoredRestarting,
+    MonitoredStopTimedOut,
+    MonitoredActionFailed,
+    MonitoredCheckFailed,
+    MonitoredCheckRecovered
 }
 
 public sealed record SupervisorEvent(DateTimeOffset At, EventKind Kind, string? Group, int? ProcessId, string Detail);
