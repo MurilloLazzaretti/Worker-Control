@@ -109,4 +109,30 @@ public class UpstreamTests
         Assert.Equal([("Producao 1", 9014, @"D:\www\API\Producao"), ("Producao 1", 9015, @"D:\www\API\Producao")], sites.Select(site => (site.Name, site.Port, site.PhysicalPath)));
         Assert.Empty(UpstreamResolver.ReadSites("not xml"));
     }
+
+    [Fact]
+    public void An_application_that_runs_inside_the_worker_process_of_the_web_server_is_known_by_its_library()
+    {
+        var machine = new Machine
+        {
+            Ports = { [9014] = 4, [9012] = 4 },
+            Hosted = { new WebSite("Producao", 9014, @"D:\www\API\Producao"), new WebSite("Manutencao", 9012, @"D:\www\API\Manutencao") },
+            Running =
+            {
+                new MachineProcess(700, "w3wp", @"C:\Windows\System32\inetsrv\w3wp.exe")
+                {
+                    Hosted = [(@"D:\www\API\Producao\libeay32.dll", 1_200_000), (@"d:\WWW\api\producao\ApiProducao.dll", 24_000_000)]
+                },
+                new MachineProcess(701, "w3wp", @"C:\Windows\System32\inetsrv\w3wp.exe") { Hosted = [(@"D:\www\API\Outra\Outra.dll", 9_000_000)] }
+            }
+        };
+
+        var owners = UpstreamResolver.Resolve(["127.0.0.1:9014", "127.0.0.1:9012"], machine);
+
+        var process = Assert.Single(owners[0].Processes);
+        Assert.Equal((700, "ApiProducao"), (process.ProcessId, process.Name));
+        // A site with nothing running from its folder, in a process of its own or inside another, has nobody.
+        Assert.Empty(owners[1].Processes);
+        Assert.Equal("Manutencao", owners[1].Site);
+    }
 }

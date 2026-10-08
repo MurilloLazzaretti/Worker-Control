@@ -9,7 +9,14 @@ namespace WorkerControl.Service.Traffic;
 /// <summary>
 /// A process of this machine, as much of it as is needed to say who answers on a port.
 /// </summary>
-public sealed record MachineProcess(int ProcessId, string Name, string? Path);
+public sealed record MachineProcess(int ProcessId, string Name, string? Path)
+{
+    /// <summary>
+    /// For a process that only hosts the code of others (the worker process of IIS): the
+    /// libraries it has loaded that are not part of the system, with their size in memory.
+    /// </summary>
+    public IReadOnlyList<(string Path, long Size)> Hosted { get; init; } = [];
+}
 
 /// <summary>
 /// A site of the web server of the machine (IIS): the port it is bound to and the folder it
@@ -85,9 +92,20 @@ public static class UpstreamResolver
 
             processes ??= machine.Processes();
             var folder = site.PhysicalPath.Replace('/', '\\').TrimEnd('\\') + "\\";
-            owners.Add(new UpstreamOwner(upstream,
-                [.. processes.Where(candidate => candidate.Path is not null && candidate.Path.Replace('/', '\\').StartsWith(folder, StringComparison.OrdinalIgnoreCase))],
-                site.Name));
+            bool Inside(string? path) => path is not null && path.Replace('/', '\\').StartsWith(folder, StringComparison.OrdinalIgnoreCase);
+
+            // The application runs from the folder of the site, as a process of its own...
+            var own = processes.Where(candidate => Inside(candidate.Path)).ToList();
+            if (own.Count == 0)
+            {
+                // ...or inside the worker process of the web server, as a library loaded from that
+                // folder. It is then known by the name of that library, the largest one if several.
+                own = [.. processes
+                    .Select(candidate => (Process: candidate, Library: candidate.Hosted.Where(library => Inside(library.Path)).OrderByDescending(library => library.Size).FirstOrDefault()))
+                    .Where(found => found.Library.Path is not null)
+                    .Select(found => found.Process with { Name = System.IO.Path.GetFileNameWithoutExtension(found.Library.Path.Replace('\\', '/')) })];
+            }
+            owners.Add(new UpstreamOwner(upstream, own, site.Name));
         }
         return owners;
     }
@@ -132,6 +150,53 @@ public static class UpstreamResolver
             // A file that cannot be read tells of no sites.
         }
         return sites;
+    }
+}
+
+/// <summary>
+/// What a process that only hosts the code of others is really running.
+/// </summary>
+internal static class HostedCode
+{
+    /// <summary>
+    /// The worker process of IIS is the same executable for every application it runs.
+    /// </summary>
+    public static bool IsHost(string processName) => string.Equals(processName, "w3wp", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly string[] System = [.. new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+        }
+        .Where(folder => folder.Length > 0)
+        .Select(folder => folder.TrimEnd('\\') + "\\")];
+
+    /// <summary>
+    /// The libraries a process has loaded from outside the system: what was put there by
+    /// whoever published an application.
+    /// </summary>
+    public static List<(string Path, long Size)> Of(Process process)
+    {
+        var libraries = new List<(string, long)>();
+        try
+        {
+            foreach (ProcessModule module in process.Modules)
+            {
+                using (module)
+                {
+                    var file = module.FileName;
+                    if (!string.IsNullOrEmpty(file) && !System.Any(folder => file.StartsWith(folder, StringComparison.OrdinalIgnoreCase)))
+                        libraries.Add((file, module.ModuleMemorySize));
+                }
+            }
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            // Left, or not ours to look into.
+        }
+        return libraries;
     }
 }
 
@@ -227,15 +292,18 @@ internal sealed class WindowsMachineNetwork : IMachineNetwork
         try
         {
             string? path = null;
+            IReadOnlyList<(string, long)> hosted = [];
             try
             {
                 path = process.MainModule?.FileName;
+                if (HostedCode.IsHost(process.ProcessName))
+                    hosted = HostedCode.Of(process);
             }
             catch (Exception error) when (error is Win32Exception or InvalidOperationException or NotSupportedException)
             {
                 // A process of the system that does not let its executable be seen.
             }
-            return new MachineProcess(process.Id, process.ProcessName, path);
+            return new MachineProcess(process.Id, process.ProcessName, path) { Hosted = hosted };
         }
         catch (InvalidOperationException)
         {
