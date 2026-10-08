@@ -189,12 +189,123 @@ internal sealed class ProcessInspector : IProcessInspector
         try
         {
             using var process = Process.GetProcessById(processId);
-            return new ProcessInfo(process.StartTime.ToUniversalTime(), process.TotalProcessorTime, process.WorkingSet64, process.Threads.Count, process.HandleCount);
+            var started = process.StartTime.ToUniversalTime();
+            var processor = process.TotalProcessorTime;
+            var memory = process.WorkingSet64;
+            var threads = process.Threads.Count;
+            var handles = process.HandleCount;
+
+            // What the process started counts as part of it: a service installed through a
+            // wrapper is the wrapper, and the program that matters is its child.
+            var children = new List<string>();
+            foreach (var id in OperatingSystem.IsWindows() ? ProcessTree.Descendants(processId) : [])
+            {
+                try
+                {
+                    using var child = Process.GetProcessById(id);
+                    // A number may have been given again to somebody who has nothing to do with this.
+                    if (child.StartTime.ToUniversalTime() < started)
+                        continue;
+                    processor += child.TotalProcessorTime;
+                    memory += child.WorkingSet64;
+                    threads += child.Threads.Count;
+                    handles += child.HandleCount;
+                    children.Add(child.ProcessName);
+                }
+                catch (Exception error) when (error is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException)
+                {
+                    // Gone, or not ours to read.
+                }
+            }
+            return new ProcessInfo(started, processor, memory, threads, handles, children.Count == 0 ? null : children);
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException)
         {
             return null;
         }
+    }
+}
+
+/// <summary>
+/// Who started whom, among the processes of the machine.
+/// </summary>
+[SupportedOSPlatform("windows")]
+internal static class ProcessTree
+{
+    private const uint SnapProcess = 0x00000002;
+    private static readonly IntPtr Invalid = new(-1);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public UIntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    /// <summary>
+    /// The processes started by a process, and by those, and so on. Empty when it cannot be told.
+    /// </summary>
+    public static List<int> Descendants(int processId)
+    {
+        var childrenOf = new Dictionary<int, List<int>>();
+        var snapshot = CreateToolhelp32Snapshot(SnapProcess, 0);
+        if (snapshot == Invalid)
+            return [];
+        try
+        {
+            var entry = new PROCESSENTRY32W { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32W>() };
+            if (!Process32FirstW(snapshot, ref entry))
+                return [];
+            do
+            {
+                var parent = (int)entry.th32ParentProcessID;
+                if (!childrenOf.TryGetValue(parent, out var list))
+                    childrenOf[parent] = list = [];
+                list.Add((int)entry.th32ProcessID);
+            }
+            while (Process32NextW(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+
+        var found = new List<int>();
+        var pending = new Queue<int>([processId]);
+        var seen = new HashSet<int> { processId };
+        while (pending.Count > 0)
+        {
+            foreach (var child in childrenOf.GetValueOrDefault(pending.Dequeue()) ?? [])
+            {
+                if (seen.Add(child))
+                {
+                    found.Add(child);
+                    pending.Enqueue(child);
+                }
+            }
+        }
+        return found;
     }
 }
 

@@ -41,6 +41,45 @@ public sealed record WorkerControlConfig
     /// Windows services that are watched without being started from here.
     /// </summary>
     public ServicesConfig Services { get; init; } = new();
+
+    /// <summary>
+    /// Web applications made of modules published on this machine.
+    /// </summary>
+    public IReadOnlyList<FrontendConfig> Frontends { get; init; } = [];
+}
+
+/// <summary>
+/// A web application whose modules are published as folders under one root, listed by a
+/// manifest.
+/// </summary>
+public sealed record FrontendConfig
+{
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// The folder the web server serves the application from.
+    /// </summary>
+    public required string Root { get; init; }
+
+    /// <summary>
+    /// Where the application answers, to check that each module does. Without it, nothing is asked.
+    /// </summary>
+    public string? BaseUrl { get; init; }
+
+    /// <summary>
+    /// The site to ask for when <see cref="BaseUrl"/> is only the address of the machine.
+    /// </summary>
+    public string? Host { get; init; }
+
+    /// <summary>
+    /// The file, under the root, with the modules: an object of name and path of the entry file.
+    /// </summary>
+    public string Manifest { get; init; } = "assets/mf.manifest.json";
+
+    /// <summary>
+    /// The file, beside the entry file of each module, where the module says its version.
+    /// </summary>
+    public string VersionFile { get; init; } = "version.json";
 }
 
 public sealed record GroupConfig
@@ -266,7 +305,8 @@ public static class ConfigReader
                 EventRetention = TimeSpan.FromDays(Integer(root, "EventRetentionDays", "", defaultValue: 30, minimum: 1)),
                 HealthRetention = TimeSpan.FromHours(Integer(root, "HealthRetentionHours", "", defaultValue: 24, minimum: 1)),
                 Groups = ReadGroups(root, general),
-                Services = ReadServices(root)
+                Services = ReadServices(root),
+                Frontends = ReadFrontends(root)
             };
             return config;
         }
@@ -362,6 +402,46 @@ public static class ConfigReader
             }
         }
         return new ServicesConfig { SuggestFrom = folders, Items = items };
+    }
+
+    private static List<FrontendConfig> ReadFrontends(JsonElement root)
+    {
+        var frontends = new List<FrontendConfig>();
+        if (!root.TryGetProperty("Frontends", out var array) || array.ValueKind == JsonValueKind.Null)
+            return frontends;
+        if (array.ValueKind != JsonValueKind.Array)
+            throw new ConfigException("\"Frontends\" must be a list");
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new ConfigException("Every item of \"Frontends\" must be an object");
+            var name = Text(item, "Name", "a frontend")?.Trim();
+            if (string.IsNullOrEmpty(name))
+                throw new ConfigException("Every frontend needs a \"Name\"");
+            if (!names.Add(name))
+                throw new ConfigException($"There are two frontends named \"{name}\"");
+
+            var where = $"frontend \"{name}\"";
+            var folder = Text(item, "Root", where)?.Trim();
+            if (string.IsNullOrEmpty(folder))
+                throw new ConfigException($"\"Root\" is required in {where}");
+            var address = Text(item, "BaseUrl", where) is { Length: > 0 } given ? given.Trim() : null;
+            if (address is not null && !(Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"))
+                throw new ConfigException($"\"BaseUrl\" must be an http or https address in {where}");
+
+            frontends.Add(new FrontendConfig
+            {
+                Name = name,
+                Root = folder,
+                BaseUrl = address,
+                Host = Text(item, "Host", where) is { Length: > 0 } host ? host.Trim() : null,
+                Manifest = Text(item, "Manifest", where) is { Length: > 0 } manifest ? manifest.Trim() : "assets/mf.manifest.json",
+                VersionFile = Text(item, "VersionFile", where) is { Length: > 0 } version ? version.Trim() : "version.json"
+            });
+        }
+        return frontends;
     }
 
     private static ServiceCheck? ReadCheck(JsonElement service, string where)

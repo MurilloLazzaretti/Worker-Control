@@ -199,6 +199,27 @@ Services of the machine that are not started by Worker Control can be watched by
 | `Check` | none | `Tcp` (a host and port that has to take a connection) or `Url` (an address that has to answer 2xx), tried every 15 seconds while the service runs |
 | `LogFiles` | none | Folder and file name pattern of the log of the service |
 
+### Web application
+
+A web application made of modules published as folders (micro frontends) can be watched too: which modules there are, the version each one says it is in, whether each one answers, and when each one was published.
+
+```json
+"Frontends": [
+  { "Name": "App", "Root": "D:\\www\\app", "BaseUrl": "http://app.example" }
+]
+```
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Name` | | How the application is called in the panel |
+| `Root` | | The folder the web server serves it from |
+| `BaseUrl` | none | Where it answers. Each module is asked for there once a minute; without it, a module is only checked on disk |
+| `Host` | none | The name of the site, when `BaseUrl` is only the address of the machine |
+| `Manifest` | `assets/mf.manifest.json` | The file with the modules: an object of name and path of the entry file |
+| `VersionFile` | `version.json` | The file beside the entry file of each module, with `nome`, `build` and `versions` (`version`, `date`, `descriptions`), the newest first |
+
+What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
+
 ## ⚙️ Installation
 
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.

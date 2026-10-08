@@ -38,6 +38,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private ZapMQBroker? _broker;
     private TraceRelay? _trace;
     private ServiceWatcher? _watcher;
+    private FrontendWatcher? _frontends;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -65,6 +66,12 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         monitored.Event += Record;
         _watcher = monitored;
 
+        using var web = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(5), AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(8) };
+        var frontends = new FrontendWatcher(_directory, FrontendWatcher.Http(web), time, loggers.CreateLogger("WorkerControl.Frontends"));
+        frontends.Event += Record;
+        frontends.ApplyConfig(config.Frontends);
+        _frontends = frontends;
+
         Record(EventKind.ServiceStarted, $"version {ServiceHost.Version}");
         supervisor.ApplyConfig(config);
         monitored.ApplyConfig(config.Services);
@@ -89,6 +96,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
             supervisor.Tick();
             monitored.Tick();
+            frontends.Tick();
             Save(supervisor, state, ref savedVersion);
 
             if (now >= nextHealth)
@@ -215,6 +223,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         _appliedText = text;
         supervisor.ApplyConfig(config);
         _watcher?.ApplyConfig(config.Services);
+        _frontends?.ApplyConfig(config.Frontends);
     }
 
     private FileSystemWatcher? WatchConfig()
@@ -334,6 +343,12 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             case "Status":
                 return Admin.Status(supervisor.GetStatus(), _startedAt, _config!.ZapMQHost, _config.ZapMQPort,
                     _broker?.HealthySince(time.GetUtcNow() - TimeSpan.FromSeconds(10)) ?? false, _lastHealth, _watcher!.GetStatus());
+
+            case "Frontends":
+            {
+                var (apps, publications) = _frontends!.Snapshot();
+                return Admin.Frontends(apps, publications);
+            }
 
             case "ListServices":
             {
@@ -499,7 +514,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         {
             EventKind.WorkerCrashed or EventKind.WorkerHung or EventKind.WorkerStartTimedOut or EventKind.WorkerStartFailed
                 or EventKind.SafeStopTimedOut or EventKind.GroupUnstable or EventKind.ConfigRefused
-                or EventKind.MonitoredCrashed or EventKind.MonitoredStopTimedOut or EventKind.MonitoredActionFailed or EventKind.MonitoredCheckFailed => LogLevel.Warning,
+                or EventKind.MonitoredCrashed or EventKind.MonitoredStopTimedOut or EventKind.MonitoredActionFailed or EventKind.MonitoredCheckFailed or EventKind.FrontendDown => LogLevel.Warning,
             _ => LogLevel.Information
         };
 

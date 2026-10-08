@@ -136,7 +136,12 @@ public enum EventKind
     MonitoredStopTimedOut,
     MonitoredActionFailed,
     MonitoredCheckFailed,
-    MonitoredCheckRecovered
+    MonitoredCheckRecovered,
+
+    // About the micro frontends published on the machine.
+    FrontendPublished,
+    FrontendDown,
+    FrontendUp
 }
 
 public sealed record SupervisorEvent(DateTimeOffset At, EventKind Kind, string? Group, int? ProcessId, string Detail);

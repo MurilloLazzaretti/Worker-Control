@@ -86,7 +86,12 @@ public interface IServiceManager
     void Stop(string name);
 }
 
-public sealed record ProcessInfo(DateTimeOffset StartTime, TimeSpan ProcessorTime, long MemoryBytes, int Threads, int Handles);
+/// <summary>
+/// A process and everything it started, measured together: a service is often only what
+/// starts the program that does the work. <see cref="Children"/> are the names of the
+/// processes it started, when there are any.
+/// </summary>
+public sealed record ProcessInfo(DateTimeOffset StartTime, TimeSpan ProcessorTime, long MemoryBytes, int Threads, int Handles, IReadOnlyList<string>? Children = null);
 
 public interface IProcessInspector
 {

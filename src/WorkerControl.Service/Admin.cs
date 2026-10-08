@@ -60,6 +60,8 @@ internal static class Admin
             ["MemoryBytes"] = status.Process?.MemoryBytes,
             ["Threads"] = status.Process?.Threads,
             ["Handles"] = status.Process?.Handles,
+            // The programs the service started, which are measured with it.
+            ["Children"] = status.Process?.Children is { } children ? new JArray(children) : null,
             ["AutoRestart"] = status.Config.AutoRestart,
             ["RestartingAt"] = status.RestartingAt,
             ["Restarting"] = status.Restarting,
@@ -71,6 +73,52 @@ internal static class Admin
                 : null
         };
     }
+
+    public static JObject Frontends(IReadOnlyList<FrontendWatcher.App> apps, IReadOnlyList<FrontendWatcher.Publication> publications) => Ok(answer =>
+    {
+        answer["Frontends"] = new JArray(apps.Select(app => new JObject
+        {
+            ["Name"] = app.Name,
+            ["Root"] = app.Root,
+            ["BaseUrl"] = app.BaseUrl,
+            ["Problem"] = app.Problem,
+            ["CheckedAt"] = app.CheckedAt,
+            ["ShellPublishedAt"] = app.ShellAt,
+            ["Orphans"] = new JArray(app.Orphans),
+            ["Modules"] = new JArray(app.Modules.Select(module => new JObject
+            {
+                ["Name"] = module.Name,
+                ["Entry"] = module.Entry,
+                ["State"] = module.State,
+                ["Online"] = module.Online,
+                ["Status"] = module.Status,
+                ["Problem"] = module.Problem,
+                ["Title"] = module.Title,
+                ["Build"] = module.Build,
+                ["PublishedAt"] = module.PublishedAt,
+                ["Files"] = module.Files,
+                ["Bytes"] = module.Bytes,
+                ["Versions"] = new JArray(module.Versions.Select(version => new JObject
+                {
+                    ["Version"] = version.Version,
+                    ["Date"] = version.Date,
+                    ["Descriptions"] = new JArray(version.Descriptions)
+                }))
+            }))
+        }));
+        answer["Publications"] = new JArray(publications.Select(publication => new JObject
+        {
+            ["At"] = publication.At,
+            ["App"] = publication.App,
+            ["Module"] = publication.Module,
+            ["Kind"] = publication.Kind,
+            ["FromVersion"] = publication.FromVersion,
+            ["ToVersion"] = publication.ToVersion,
+            ["FromBuild"] = publication.FromBuild,
+            ["ToBuild"] = publication.ToBuild,
+            ["Count"] = publication.Count
+        }));
+    });
 
     /// <summary>
     /// The services of the machine, for whoever is choosing which to watch: the ones from the
