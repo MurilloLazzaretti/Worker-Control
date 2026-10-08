@@ -97,7 +97,7 @@ internal static partial class SqlScript
         if (withDefault && column.Default is not null)
         {
             // A name the instance made up is different on every instance: not part of what the table is.
-            if (column.DefaultName is not null && !column.DefaultNamedBySystem)
+            if (column.DefaultName is not null && !column.DefaultNamedBySystem && !MadeUp().IsMatch(column.DefaultName))
                 line.Append(" CONSTRAINT ").Append(Name(column.DefaultName));
             line.Append(" DEFAULT ").Append(column.Default);
         }
@@ -161,6 +161,13 @@ internal static partial class SqlScript
         var match = Regex.Match(text, Regex.Escape(name) + @"(?![\w@#$])", RegexOptions.IgnoreCase);
         return match.Success ? match.Index : -1;
     }
+
+    /// <summary>
+    /// A name of the kind the instance makes up, kept as if it had been chosen by a script that
+    /// copied the table from somewhere else: <c>DF__Orders__Total__36D11DD4</c>.
+    /// </summary>
+    [GeneratedRegex(@"^DF__.+__[0-9A-Fa-f]{8}$")]
+    private static partial Regex MadeUp();
 
     [GeneratedRegex(@"--[^\n]*|/\*.*?\*/", RegexOptions.Singleline)]
     private static partial Regex Comments();

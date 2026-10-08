@@ -484,6 +484,7 @@ public sealed class DatabasePartsTests : IDisposable
                 Column("Note", "nvarchar", -1, nullable: true, collation: "Latin1_General_CI_AS"),
                 Column("Price", "decimal", 9, @default: "((0))", defaultName: "DF_Price"),
                 Column("At", "datetime", 8, @default: "(getdate())", defaultName: "DF__Order__At__1A2B3C", systemNamed: true),
+                Column("Was", "int", @default: "((1))", defaultName: "DF__Order__Was__36D11DD4"),
                 Column("Kind", "OrderKind", 1, typeSchema: "dbo"),
                 Column("Total", "decimal", computed: "([Price]*(2))")
             ],
@@ -505,6 +506,7 @@ public sealed class DatabasePartsTests : IDisposable
                 [Note] nvarchar(max) NULL,
                 [Price] decimal(18, 2) NOT NULL CONSTRAINT [DF_Price] DEFAULT ((0)),
                 [At] datetime NOT NULL DEFAULT (getdate()),
+                [Was] int NOT NULL DEFAULT ((1)),
                 [Kind] [dbo].[OrderKind] NOT NULL,
                 [Total] AS ([Price]*(2)) PERSISTED,
                 CONSTRAINT [PK_OrderItem] PRIMARY KEY CLUSTERED ([Id] ASC),

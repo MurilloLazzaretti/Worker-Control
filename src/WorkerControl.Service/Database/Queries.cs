@@ -284,13 +284,15 @@ internal static class Queries
         """;
 
     /// <summary>
-    /// Who uses a type: the tables with a column of it and whatever takes a parameter of it.
+    /// Who uses a type: the tables with a column of it, whatever takes a parameter of it and
+    /// whatever declares something of it in its text.
     /// </summary>
     public const string TypeUsedBy = """
         SELECT DISTINCT SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type), CAST(NULL AS nvarchar(128))
         FROM sys.objects o
         WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
           AND (EXISTS (SELECT 1 FROM sys.columns c WHERE c.object_id = o.object_id AND c.user_type_id = @id)
-               OR EXISTS (SELECT 1 FROM sys.parameters p WHERE p.object_id = o.object_id AND p.user_type_id = @id))
+               OR EXISTS (SELECT 1 FROM sys.parameters p WHERE p.object_id = o.object_id AND p.user_type_id = @id)
+               OR EXISTS (SELECT 1 FROM sys.sql_expression_dependencies d WHERE d.referencing_id = o.object_id AND d.referenced_class = 6 AND d.referenced_id = @id))
         """;
 }
