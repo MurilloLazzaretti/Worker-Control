@@ -308,6 +308,32 @@ databases, disks, backups, jobs and the statements that cost the most. Only SQL 
   instead of created again; a table or a type that exists is refused.
 - `BackupHours` zero does not look at backups. The history of the charts is kept in `database.db`.
 
+### Transport
+
+What runs on the machine can be replaced by what a package of changes brings, approved on the
+panel: a group of workers, a watched Windows service, an application behind the web server or a
+module of the web application. The targets are worked out from the rest of this file; what
+cannot be, or is to be said otherwise, goes here.
+
+```json
+"Transport": {
+  "KeepVersions": 3,
+  "Keep": ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.db", "*.db-wal", "*.db-shm", "logs/"],
+  "Targets": [
+    { "Kind": "service", "Name": "MyWrappedService", "Paths": ["D:\\Apps\\my-service"] },
+    { "Kind": "api", "Name": "Orders", "Paths": ["D:\\www\\api\\Orders"], "Sites": ["Orders 1", "Orders 2"] }
+  ]
+}
+```
+
+- Replacing a target stops whatever runs from its folder, keeps a copy of the folder under
+  `transport/backup`, makes the folder hold exactly the files of the package and starts it
+  again. What is in `Keep` is never packed nor replaced. If the files cannot all be put, the
+  copy is put back first.
+- A service that is run by a wrapper says nothing of where its program is: name its folder here.
+- Sites are taken off the air by stopping their application pools with `appcmd.exe`, which asks
+  for the service to run with enough rights to do it.
+
 ## ⚙️ Installation
 
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.
