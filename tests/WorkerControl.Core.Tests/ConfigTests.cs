@@ -231,4 +231,28 @@ public class ConfigTests
 
         Assert.Contains(complaint, error.Message);
     }
+
+    [Fact]
+    public void The_database_is_read_with_its_defaults()
+    {
+        var config = ConfigReader.Parse("""
+            { "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [],
+              "Database": { "Server": " HOST\\ONE ", "User": "app", "Password": "p w", "Databases": ["Sales", " "], "BackupHours": 26 } }
+            """);
+
+        var database = config.Database!;
+        Assert.Equal(("HOST\\ONE", "HOST\\ONE", "app", "p w"), (database.Name, database.Server, database.User, database.Password));
+        Assert.Equal(["Sales"], database.Databases);
+        Assert.Equal((30, 7, 30, 26, 10), (database.SampleSeconds, database.RetentionDays, database.BlockingSeconds, database.BackupHours, database.DiskFreePercent));
+        Assert.True(database.TrustServerCertificate);
+        Assert.False(database.Encrypt);
+    }
+
+    [Fact]
+    public void A_database_without_a_server_is_refused()
+    {
+        var error = Assert.Throws<ConfigException>(() => ConfigReader.Parse("""{ "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [], "Database": { "Name": "X" } }"""));
+        Assert.Contains("Server", error.Message);
+        Assert.Null(ConfigReader.Parse("""{ "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [] }""").Database);
+    }
 }

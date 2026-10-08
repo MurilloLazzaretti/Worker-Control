@@ -141,7 +141,13 @@ public enum EventKind
     // About the micro frontends published on the machine.
     FrontendPublished,
     FrontendDown,
-    FrontendUp
+    FrontendUp,
+
+    // About the database instance of the environment.
+    DatabaseDown,
+    DatabaseUp,
+    DatabaseAlert,
+    DatabaseAlertCleared
 }
 
 public sealed record SupervisorEvent(DateTimeOffset At, EventKind Kind, string? Group, int? ProcessId, string Detail);

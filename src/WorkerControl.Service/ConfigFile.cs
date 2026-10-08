@@ -38,16 +38,46 @@ internal sealed class ConfigFile(string directory)
     /// Replaces the whole file. Throws <see cref="ConfigException"/> when the new contents
     /// would not be accepted.
     /// </summary>
-    public void Write(string json)
+    public void Write(string json) => Write(json, keepPrevious: true);
+
+    private void Write(string json, bool keepPrevious)
     {
         ConfigReader.Parse(json);
         lock (_gate)
         {
             var temporary = Path + ".tmp";
             File.WriteAllText(temporary, json);
-            if (File.Exists(Path))
+            if (keepPrevious && File.Exists(Path))
                 File.Copy(Path, Path + ".bak", overwrite: true);
             File.Move(temporary, Path, overwrite: true);
+        }
+    }
+
+    /// <summary>
+    /// Replaces a password of the database that was typed in the file by one only this machine
+    /// reads back. The file as it was is not kept beside it: it had the password in it. True
+    /// when the file was changed.
+    /// </summary>
+    public bool ProtectSecrets(Database.ISecretProtector protector)
+    {
+        if (!protector.Available)
+            return false;
+        lock (_gate)
+        {
+            var root = JObject.Parse(Read(), new JsonLoadSettings { CommentHandling = CommentHandling.Ignore });
+            if (root["Database"] is not JObject database || database["Password"] is not JValue { Type: JTokenType.String } password)
+                return false;
+            var typed = (string)password!;
+            if (typed.Length == 0 || Database.Secret.IsProtected(typed))
+                return false;
+
+            database["Password"] = protector.Protect(typed);
+            Write(root.ToString(Formatting.Indented), keepPrevious: false);
+            // A copy left by an earlier change may carry the same password.
+            var previous = Path + ".bak";
+            if (File.Exists(previous) && File.ReadAllText(previous).Contains(JsonConvert.ToString(typed), StringComparison.Ordinal))
+                File.Delete(previous);
+            return true;
         }
     }
 

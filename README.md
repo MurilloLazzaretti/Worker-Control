@@ -258,6 +258,37 @@ A web application made of modules published as folders (micro frontends) can be 
 
 What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
 
+### Database
+
+The one database instance the applications of the machine use can be watched too: whether it
+answers, processor and memory, sessions per application, what is running, who blocks whom,
+databases, disks, backups, jobs and the statements that cost the most. Only SQL Server for now.
+
+```json
+"Database": {
+  "Name": "DEV",
+  "Server": "host\\instance",
+  "User": "user",
+  "Password": "typed once",
+  "Databases": ["MyDatabase"],
+  "SampleSeconds": 30,
+  "BlockingSeconds": 30,
+  "BackupHours": 0,
+  "DiskFreePercent": 10,
+  "RetentionDays": 7
+}
+```
+
+- **No row of any table is ever read.** Every statement sent to the instance is in
+  `Database/Queries.cs` and reads only its catalog, its management views and the history of
+  backups and jobs; a test refuses anything else. The text of running statements is given
+  without the values written in it.
+- **The password does not stay as typed.** On the first read it is replaced in the file by one
+  protected with the data protection of Windows under the key of the machine (`dpapi:...`). Type
+  a new one over it to change it. Without `User`, the account of the service is used.
+- A part the user of the connection may not read is left out and named; the rest still comes.
+- `BackupHours` zero does not look at backups. The history of the charts is kept in `database.db`.
+
 ## ⚙️ Installation
 
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.

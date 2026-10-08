@@ -61,6 +61,15 @@ public static class ServiceHost
             else
                 builder.Services.AddSingleton<IServiceManager, NoServiceManager>();
         }
+        if (!builder.Services.Any(service => service.ServiceType == typeof(Database.IDatabaseSource)))
+            builder.Services.AddSingleton<Database.IDatabaseSource, Database.SqlServerSource>();
+        if (!builder.Services.Any(service => service.ServiceType == typeof(Database.ISecretProtector)))
+        {
+            if (OperatingSystem.IsWindows())
+                builder.Services.AddSingleton<Database.ISecretProtector, Database.WindowsSecretProtector>();
+            else
+                builder.Services.AddSingleton<Database.ISecretProtector, Database.NoSecretProtector>();
+        }
         builder.Services.AddHostedService<SupervisorService>();
 
         var host = builder.Build();

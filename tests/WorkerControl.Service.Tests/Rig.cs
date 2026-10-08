@@ -83,6 +83,7 @@ public sealed class Rig : IAsyncDisposable
           "StartBatchIntervalMs": 100,
           "WorkerGroups": [ {{string.Join(",", groups)}} ]
           {{(ServicesJson is null ? "" : ", \"Services\": " + ServicesJson)}}
+          {{(DatabaseJson is null ? "" : ", \"Database\": " + DatabaseJson)}}
         }
         """);
 
@@ -90,6 +91,16 @@ public sealed class Rig : IAsyncDisposable
     /// The "Services" section of the configuration file, when the test wants one.
     /// </summary>
     public string? ServicesJson { get; set; }
+
+    /// <summary>
+    /// The "Database" section of the configuration file, when the test wants one.
+    /// </summary>
+    public string? DatabaseJson { get; set; }
+
+    /// <summary>
+    /// What the service under test is given in place of what it would find on the machine.
+    /// </summary>
+    public Action<IServiceCollection>? Register { get; set; }
 
     public async Task StartBrokerAsync()
     {
@@ -125,6 +136,7 @@ public sealed class Rig : IAsyncDisposable
             });
             if (Services is not null)
                 builder.Services.AddSingleton(Services);
+            Register?.Invoke(builder.Services);
         });
         await _service.StartAsync();
 

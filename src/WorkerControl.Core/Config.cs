@@ -51,6 +51,66 @@ public sealed record WorkerControlConfig
     /// The access log of the reverse proxy, read to measure the traffic. Null reads none.
     /// </summary>
     public TrafficConfig? Traffic { get; init; }
+
+    /// <summary>
+    /// The database instance of this environment, watched from here. Null watches none.
+    /// </summary>
+    public DatabaseConfig? Database { get; init; }
+}
+
+/// <summary>
+/// The one database instance the applications of this machine use. Only what the instance says
+/// about itself is ever read: its health and the definition of its objects, never a row of a table.
+/// </summary>
+public sealed record DatabaseConfig
+{
+    /// <summary>
+    /// How the instance is called on the panel.
+    /// </summary>
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Address of the instance, as in a connection string: <c>host\instance</c> or <c>host,port</c>.
+    /// </summary>
+    public required string Server { get; init; }
+
+    /// <summary>
+    /// Without a user, the account of the service is used.
+    /// </summary>
+    public string? User { get; init; }
+
+    /// <summary>
+    /// As it is in the file: plain when it was just typed, protected after the first read.
+    /// </summary>
+    public string? Password { get; init; }
+
+    public bool Encrypt { get; init; }
+
+    public bool TrustServerCertificate { get; init; } = true;
+
+    /// <summary>
+    /// The databases whose objects are listed. The health is of the whole instance.
+    /// </summary>
+    public IReadOnlyList<string> Databases { get; init; } = [];
+
+    public int SampleSeconds { get; init; } = 30;
+
+    public int RetentionDays { get; init; } = 7;
+
+    /// <summary>
+    /// For how long a session may be kept waiting by another before it is a problem.
+    /// </summary>
+    public int BlockingSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// How old the last full backup of a database may be. Zero does not look at backups.
+    /// </summary>
+    public int BackupHours { get; init; }
+
+    /// <summary>
+    /// How little of a disk with database files may be free, in percent.
+    /// </summary>
+    public int DiskFreePercent { get; init; } = 10;
 }
 
 /// <summary>
@@ -357,7 +417,8 @@ public static class ConfigReader
                 Groups = ReadGroups(root, general),
                 Services = ReadServices(root),
                 Frontends = ReadFrontends(root),
-                Traffic = ReadTraffic(root)
+                Traffic = ReadTraffic(root),
+                Database = ReadDatabase(root)
             };
             return config;
         }
@@ -488,6 +549,43 @@ public static class ConfigReader
             GroupBy = traffic.TryGetProperty("GroupBy", out _) ? Texts("GroupBy") : ["api", "mfe"],
             Routes = Texts("Routes"),
             Ignore = Texts("Ignore")
+        };
+    }
+
+    private static DatabaseConfig? ReadDatabase(JsonElement root)
+    {
+        if (!root.TryGetProperty("Database", out var database) || database.ValueKind == JsonValueKind.Null)
+            return null;
+        if (database.ValueKind != JsonValueKind.Object)
+            throw new ConfigException("\"Database\" must be an object");
+
+        const string where = "\"Database\"";
+        var server = Text(database, "Server", where)?.Trim();
+        if (string.IsNullOrEmpty(server))
+            throw new ConfigException($"\"Server\" is required in {where}");
+
+        var names = new List<string>();
+        if (database.TryGetProperty("Databases", out var array) && array.ValueKind != JsonValueKind.Null)
+        {
+            if (array.ValueKind != JsonValueKind.Array || array.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+                throw new ConfigException($"\"Databases\" must be a list of texts in {where}");
+            names = [.. array.EnumerateArray().Select(item => item.GetString()!.Trim()).Where(item => item.Length > 0)];
+        }
+
+        return new DatabaseConfig
+        {
+            Name = Text(database, "Name", where) is { Length: > 0 } name ? name.Trim() : server,
+            Server = server,
+            User = Text(database, "User", where) is { Length: > 0 } user ? user.Trim() : null,
+            Password = Text(database, "Password", where) is { Length: > 0 } password ? password : null,
+            Encrypt = Boolean(database, "Encrypt", where, defaultValue: false),
+            TrustServerCertificate = Boolean(database, "TrustServerCertificate", where, defaultValue: true),
+            Databases = names,
+            SampleSeconds = Integer(database, "SampleSeconds", where, defaultValue: 30, minimum: 5),
+            RetentionDays = Integer(database, "RetentionDays", where, defaultValue: 7, minimum: 1),
+            BlockingSeconds = Integer(database, "BlockingSeconds", where, defaultValue: 30, minimum: 1),
+            BackupHours = Integer(database, "BackupHours", where, defaultValue: 0, minimum: 0),
+            DiskFreePercent = Integer(database, "DiskFreePercent", where, defaultValue: 10, minimum: 0)
         };
     }
 

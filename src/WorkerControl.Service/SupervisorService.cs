@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using WorkerControl.Core;
+using WorkerControl.Service.Database;
 using WorkerControl.Service.Traffic;
 
 namespace WorkerControl.Service;
@@ -12,7 +13,7 @@ namespace WorkerControl.Service;
 /// second, records what happens and answers whoever administers the service. When the service
 /// stops, it stops the workers too.
 /// </summary>
-internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network) : BackgroundService
+internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets) : BackgroundService
 {
     /// <summary>
     /// A file of this name in the data folder when the service stops means: leave the workers
@@ -41,6 +42,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private ServiceWatcher? _watcher;
     private FrontendWatcher? _frontends;
     private TrafficCollector? _traffic;
+    private DatabaseMonitor? _database;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -79,6 +81,12 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         traffic?.ApplyConfig(config.Traffic);
         _traffic = traffic;
 
+        using var databaseHistory = DatabaseHistory.TryOpen(_directory, _logger);
+        using var database = new DatabaseMonitor(databaseSource, secrets, databaseHistory, time, loggers.CreateLogger("WorkerControl.Database"));
+        database.Event += Record;
+        database.ApplyConfig(config.Database);
+        _database = database;
+
         Record(EventKind.ServiceStarted, $"version {ServiceHost.Version}");
         supervisor.ApplyConfig(config);
         monitored.ApplyConfig(config.Services);
@@ -105,6 +113,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             monitored.Tick();
             frontends.Tick();
             traffic?.Tick();
+            database.Tick();
             Save(supervisor, state, ref savedVersion);
 
             if (now >= nextHealth)
@@ -181,6 +190,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         {
             try
             {
+                ProtectSecrets();
                 var text = _file.Read();
                 var config = ConfigReader.Parse(text);
                 _appliedText = text;
@@ -205,6 +215,25 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         return null;
     }
 
+    /// <summary>
+    /// A password typed in the configuration does not stay there as it was typed.
+    /// </summary>
+    private bool ProtectSecrets()
+    {
+        try
+        {
+            if (!_file.ProtectSecrets(secrets))
+                return false;
+            _logger.LogInformation("The password of the database in {File} was replaced by one only this machine reads", ConfigFile.Name);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or Newtonsoft.Json.JsonException or ConfigException)
+        {
+            // Whatever is wrong with the file is said by whoever reads it next.
+            return false;
+        }
+    }
+
     private void Reload(Supervisor supervisor)
     {
         string text;
@@ -212,6 +241,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         try
         {
             text = _file.Read();
+            if (text != _appliedText && ProtectSecrets())
+                text = _file.Read();
             if (text == _appliedText)
                 return;
             config = ConfigReader.Parse(text);
@@ -233,6 +264,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         _watcher?.ApplyConfig(config.Services);
         _frontends?.ApplyConfig(config.Frontends);
         _traffic?.ApplyConfig(config.Traffic);
+        _database?.ApplyConfig(config.Database);
     }
 
     private FileSystemWatcher? WatchConfig()
@@ -388,6 +420,32 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
             case "TrafficErrors":
                 return TrafficAnswers.Errors(_traffic!.Store, TrafficAnswers.Filter(request), request.Value<int?>("Limit") ?? 100);
+
+            case "Database":
+                return DatabaseAnswers.State(_database!.Snapshot());
+
+            case "DatabaseHistory" when _database?.History is null:
+                return Admin.Error("history-unavailable", "The history of the database is not being kept on this machine; see the log of the service");
+
+            case "DatabaseHistory":
+            {
+                var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
+                return DatabaseAnswers.History(_database!.History!.Read(from, to));
+            }
+
+            case "DatabaseQueries":
+            {
+                if (!_database!.Snapshot().Configured)
+                    return Admin.Error("not-configured", "No database is configured");
+                try
+                {
+                    return DatabaseAnswers.Expensive(_database.ExpensiveAsync().GetAwaiter().GetResult());
+                }
+                catch (Exception error) when (error is System.Data.Common.DbException or InvalidOperationException or TimeoutException)
+                {
+                    return Admin.Error("database-failed", error.Message);
+                }
+            }
 
             case "Frontends":
             {
@@ -574,7 +632,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         {
             EventKind.WorkerCrashed or EventKind.WorkerHung or EventKind.WorkerStartTimedOut or EventKind.WorkerStartFailed
                 or EventKind.SafeStopTimedOut or EventKind.GroupUnstable or EventKind.ConfigRefused
-                or EventKind.MonitoredCrashed or EventKind.MonitoredStopTimedOut or EventKind.MonitoredActionFailed or EventKind.MonitoredCheckFailed or EventKind.FrontendDown => LogLevel.Warning,
+                or EventKind.MonitoredCrashed or EventKind.MonitoredStopTimedOut or EventKind.MonitoredActionFailed or EventKind.MonitoredCheckFailed or EventKind.FrontendDown
+                or EventKind.DatabaseDown or EventKind.DatabaseAlert => LogLevel.Warning,
             _ => LogLevel.Information
         };
 
