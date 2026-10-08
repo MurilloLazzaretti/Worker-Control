@@ -90,7 +90,7 @@ internal static class Queries
         """;
 
     public const string Volumes = """
-        SELECT DISTINCT v.volume_mount_point, ISNULL(v.logical_volume_name, N''), CAST(v.total_bytes AS bigint), CAST(v.available_bytes AS bigint)
+        SELECT DISTINCT v.volume_mount_point, ISNULL(v.logical_volume_name, N''), CAST(v.total_bytes AS bigint), CAST(v.available_bytes AS bigint), ISNULL(DB_NAME(f.database_id), N'')
         FROM sys.master_files f
         CROSS APPLY sys.dm_os_volume_stats(f.database_id, f.file_id) v
         """;
@@ -119,18 +119,24 @@ internal static class Queries
         """;
 
     /// <summary>
-    /// The statements that cost the most since the instance started, by processor, by time and by reads.
+    /// The statements that cost the most since the instance started, by processor, by time and by
+    /// reads. Only what ran in a database of an application: what any monitor asks of the
+    /// instance, this one included, runs in the system databases. <c>@names</c> narrows it to
+    /// some databases, written as <c>|one|another|</c>; empty takes them all.
     /// </summary>
     public const string Expensive = """
         WITH q AS (
             SELECT qs.sql_handle, qs.statement_start_offset, qs.statement_end_offset, qs.execution_count,
                    qs.total_worker_time, qs.total_elapsed_time, qs.total_logical_reads, qs.max_elapsed_time,
-                   DATEDIFF(MINUTE, qs.last_execution_time, GETDATE()) AS last_minutes,
+                   DATEDIFF(MINUTE, qs.last_execution_time, GETDATE()) AS last_minutes, d.dbid,
                    ROW_NUMBER() OVER (ORDER BY qs.total_worker_time DESC) AS by_cpu,
                    ROW_NUMBER() OVER (ORDER BY qs.total_elapsed_time DESC) AS by_time,
                    ROW_NUMBER() OVER (ORDER BY qs.total_logical_reads DESC) AS by_reads
-            FROM sys.dm_exec_query_stats qs)
-        SELECT ISNULL(DB_NAME(t.dbid), N''),
+            FROM sys.dm_exec_query_stats qs
+            CROSS APPLY (SELECT CONVERT(int, pa.value) AS dbid FROM sys.dm_exec_plan_attributes(qs.plan_handle) pa WHERE pa.attribute = N'dbid') d
+            WHERE d.dbid > 4 AND d.dbid < 32767
+              AND (@names = N'' OR CHARINDEX(N'|' + LOWER(DB_NAME(d.dbid)) + N'|', @names) > 0))
+        SELECT ISNULL(DB_NAME(q.dbid), N''),
                ISNULL(OBJECT_SCHEMA_NAME(t.objectid, t.dbid) + N'.' + OBJECT_NAME(t.objectid, t.dbid), N''),
                q.execution_count, q.total_worker_time, q.total_elapsed_time, q.total_logical_reads, q.max_elapsed_time, q.last_minutes,
                CASE WHEN q.by_cpu <= 25 THEN 1 ELSE 0 END, CASE WHEN q.by_time <= 25 THEN 1 ELSE 0 END, CASE WHEN q.by_reads <= 25 THEN 1 ELSE 0 END,

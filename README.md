@@ -287,6 +287,10 @@ databases, disks, backups, jobs and the statements that cost the most. Only SQL 
   protected with the data protection of Windows under the key of the machine (`dpapi:...`). Type
   a new one over it to change it. Without `User`, the account of the service is used.
 - A part the user of the connection may not read is left out and named; the rest still comes.
+- With `Databases`, only those are shown: their sessions, what runs in them, their disks, backups
+  and costly statements. An instance is often shared with other environments. Without it, all
+  the databases are. The costly statements never include what runs in the system databases,
+  which is where monitors (this one too) ask their questions.
 - `BackupHours` zero does not look at backups. The history of the charts is kept in `database.db`.
 
 ## ⚙️ Installation

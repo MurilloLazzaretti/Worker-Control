@@ -35,7 +35,13 @@ public sealed record SessionGroup(string Program, string Host, string Login, str
 public sealed record Activity(int SessionId, string Status, string Command, long ElapsedMs, long CpuMs, long Reads, string WaitType, long WaitMs,
     int BlockedBy, string Database, string Program, string Host, string Login, int OpenTransactions, bool Running, string Text);
 
-public sealed record Volume(string Mount, string Label, long TotalBytes, long FreeBytes);
+/// <summary>
+/// A disk with files of databases on it, and of which ones.
+/// </summary>
+public sealed record Volume(string Mount, string Label, long TotalBytes, long FreeBytes)
+{
+    public IReadOnlyList<string> Databases { get; init; } = [];
+}
 
 /// <summary>
 /// The last backups of a database, each as how many minutes ago it finished.
@@ -85,5 +91,8 @@ public interface IDatabaseSource
 
     Task<SlowSample> SlowAsync(DatabaseConnection connection, CancellationToken stopping);
 
-    Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, CancellationToken stopping);
+    /// <summary>
+    /// The statements that cost the most in the databases named; in all of the applications when none is.
+    /// </summary>
+    Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, IReadOnlyList<string> databases, CancellationToken stopping);
 }

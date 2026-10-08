@@ -38,9 +38,12 @@ internal sealed class PretendInstance : IDatabaseSource
 
     public Task<SlowSample> SlowAsync(DatabaseConnection connection, CancellationToken stopping) => Task.FromResult(Slow);
 
-    public Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, CancellationToken stopping)
+    public IReadOnlyList<string> ExpensiveOf { get; private set; } = [];
+
+    public Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, IReadOnlyList<string> databases, CancellationToken stopping)
     {
         ExpensiveAsked++;
+        ExpensiveOf = databases;
         return Task.FromResult<IReadOnlyList<ExpensiveQuery>>(Expensive);
     }
 }
@@ -82,8 +85,9 @@ public sealed class DatabaseMonitorTests
     private readonly Clock _clock = new();
     private readonly List<SupervisorEvent> _events = [];
 
-    private DatabaseConfig Config(string? password = "secret", int backupHours = 0) => new()
+    private DatabaseConfig Config(string? password = "secret", int backupHours = 0, params string[] databases) => new()
     {
+        Databases = databases,
         Name = "Test", Server = "HOST\\ONE", User = "app", Password = password, BackupHours = backupHours, BlockingSeconds = 30, DiskFreePercent = 10
     };
 
@@ -231,6 +235,50 @@ public sealed class DatabaseMonitorTests
         // A database that is not online is one problem, not two.
         Assert.Equal(["Backup|Stock", "Disk|D:\\", "Job|Nightly", "State|Old"],
             monitor.Snapshot().Alerts.Select(alert => alert.Key).OrderBy(key => key, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Only_the_databases_named_are_shown_when_any_is()
+    {
+        var config = Config(backupHours: 24, databases: ["sales", "Gone"]);
+        using var monitor = Monitor(config);
+        Activity Doing(int session, string database, int blockedBy = 0) => new(session, "running", "SELECT", 100, 1, 1, "", blockedBy > 0 ? 1000 : 0, blockedBy, database, "App", "H", "app", 0, true, "SELECT ?");
+        _instance.Fast = PretendInstance.Healthy() with
+        {
+            Databases =
+            [
+                new DatabaseInfo("master", "ONLINE", "SIMPLE", "MULTI_USER", false, 150, true, 1, 1),
+                new DatabaseInfo("Sales", "ONLINE", "FULL", "MULTI_USER", false, 150, false, 1, 1),
+                new DatabaseInfo("Other", "SUSPECT", "FULL", "MULTI_USER", false, 150, false, 1, 1)
+            ],
+            Sessions = [new SessionGroup("App", "H", "app", "Sales", 3, 0, 0), new SessionGroup("App", "H", "app", "Other", 9, 0, 0), new SessionGroup("Tool", "H", "app", "master", 2, 0, 0)],
+            // 10 works on Sales and waits for 20, which waits for 30; neither of those is on Sales. 40 has nothing to do with it.
+            Activity = [Doing(10, "Sales", blockedBy: 20), Doing(20, "Other", blockedBy: 30), Doing(30, "master"), Doing(40, "Other")]
+        };
+        _instance.Slow = new SlowSample
+        {
+            Volumes =
+            [
+                new Volume("D:\\", "Data", 1000, 500) { Databases = ["Sales", "Other"] }, new Volume("E:\\", "Else", 1000, 10) { Databases = ["Other"] },
+                new Volume("T:\\", "Temp", 1000, 500) { Databases = ["tempdb"] }
+            ],
+            Backups = [new Backups("Sales", 60, null, 5), new Backups("Other", 99999, null, null)],
+            Jobs = []
+        };
+
+        await Look(monitor, config);
+
+        var state = monitor.Snapshot();
+        Assert.Equal(["Sales"], state.Fast!.Databases!.Select(database => database.Name));
+        Assert.Equal(3, state.Fast.Sessions!.Sum(group => group.Sessions));
+        Assert.Equal([10, 20, 30], state.Fast.Activity!.Select(item => item.SessionId).Order());
+        Assert.Equal(["D:\\", "T:\\"], state.Slow!.Volumes!.Select(volume => volume.Mount));
+        Assert.Equal(["Sales"], state.Slow.Backups!.Select(backup => backup.Database));
+        // Nothing of the other databases asks for attention; a name the instance does not have does.
+        Assert.Equal("Missing|Gone", Assert.Single(state.Alerts).Key);
+
+        await monitor.ExpensiveAsync();
+        Assert.Equal(["sales", "Gone"], _instance.ExpensiveOf);
     }
 
     [Fact]
@@ -384,7 +432,7 @@ public class DatabaseAdminTests
         Assert.True(await Rig.Eventually(async () => (state = await rig.CommandAsync("Database"))?.Value<bool?>("Online") == true));
         Assert.Equal("Test", state!.Value<string>("Name"));
         Assert.Equal("SQL Server 2019", state["Instance"]!.Value<string>("Product"));
-        Assert.Equal("Sales", state["DatabaseList"]![1]!.Value<string>("Name"));
+        Assert.Equal("Sales", Assert.Single(state["DatabaseList"]!).Value<string>("Name"));
         Assert.Equal(12, state["Sessions"]![0]!.Value<int>("Sessions"));
         Assert.Empty((JObject)state["Problems"]!);
         Assert.DoesNotContain("typed", state.ToString());

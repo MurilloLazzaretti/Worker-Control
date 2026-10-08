@@ -86,7 +86,10 @@ internal sealed class SqlServerSource : IDatabaseSource
         await using var sql = await OpenAsync(connection, stopping);
         var problems = new Dictionary<string, string>();
 
-        var volumes = await Part(sql, "Volumes", Queries.Volumes, problems, stopping, row => new Volume(Text(row, 0), Text(row, 1), Number(row, 2), Number(row, 3)));
+        var files = await Part(sql, "Volumes", Queries.Volumes, problems, stopping, row => (Volume: new Volume(Text(row, 0), Text(row, 1), Number(row, 2), Number(row, 3)), Database: Text(row, 4)));
+        var volumes = files?.GroupBy(file => file.Volume.Mount, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First().Volume with { Databases = [.. group.Select(file => file.Database).Where(name => name.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)] })
+            .OrderBy(volume => volume.Mount, StringComparer.OrdinalIgnoreCase).ToList();
         var backups = await Part(sql, "Backups", Queries.Backups, problems, stopping, row => (Database: Text(row, 0), Type: Text(row, 1).Trim(), Minutes: (int)Number(row, 2)));
         var jobs = await Part(sql, "Jobs", Queries.Jobs, problems, stopping, row =>
             new Job(Text(row, 0), Convert.ToBoolean(row.GetValue(1)), Whole(row, 2), Whole(row, 3), Whole(row, 4), Text(row, 5)));
@@ -104,10 +107,11 @@ internal sealed class SqlServerSource : IDatabaseSource
         };
     }
 
-    public async Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, CancellationToken stopping)
+    public async Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, IReadOnlyList<string> databases, CancellationToken stopping)
     {
         await using var sql = await OpenAsync(connection, stopping);
-        return await ReadAsync(sql, Queries.Expensive, stopping, row =>
+        var names = databases.Count == 0 ? "" : "|" + string.Join("|", databases.Select(name => name.ToLowerInvariant())) + "|";
+        return await ReadAsync(sql, Queries.Expensive, stopping, command => command.Parameters.Add(new SqlParameter("@names", System.Data.SqlDbType.NVarChar, 4000) { Value = names }), row =>
             new ExpensiveQuery(Text(row, 0), Text(row, 1), Number(row, 2), Number(row, 3) / 1000.0, Number(row, 4) / 1000.0, Number(row, 5), Number(row, 6) / 1000.0,
                 (int)Number(row, 7), Number(row, 8) == 1, Number(row, 9) == 1, Number(row, 10) == 1, SqlText.Mask(Text(row, 11))));
     }
@@ -153,11 +157,15 @@ internal sealed class SqlServerSource : IDatabaseSource
         }
     }
 
-    private static async Task<List<T>> ReadAsync<T>(SqlConnection sql, string text, CancellationToken stopping, Func<DbDataReader, T> read)
+    private static Task<List<T>> ReadAsync<T>(SqlConnection sql, string text, CancellationToken stopping, Func<DbDataReader, T> read) =>
+        ReadAsync(sql, text, stopping, null, read);
+
+    private static async Task<List<T>> ReadAsync<T>(SqlConnection sql, string text, CancellationToken stopping, Action<SqlCommand>? prepare, Func<DbDataReader, T> read)
     {
         await using var command = sql.CreateCommand();
         command.CommandText = text;
         command.CommandTimeout = CommandSeconds;
+        prepare?.Invoke(command);
         await using var reader = await command.ExecuteReaderAsync(stopping);
         var rows = new List<T>();
         while (await reader.ReadAsync(stopping))

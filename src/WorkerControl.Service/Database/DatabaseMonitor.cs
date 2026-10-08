@@ -149,13 +149,15 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             return;
         }
         var response = watch.Elapsed.TotalMilliseconds;
+        var missing = Missing(config, fast);
+        fast = Scope(config, fast);
 
         SlowSample? slow = null;
         if (now >= _nextSlow)
         {
             try
             {
-                slow = await source.SlowAsync(connection, _stopping.Token);
+                slow = Scope(config, await source.SlowAsync(connection, _stopping.Token));
                 _nextSlow = now + SlowInterval;
             }
             catch (Exception error) when (!_stopping.IsCancellationRequested)
@@ -179,7 +181,7 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
                 return;
             var previous = _state;
             slow ??= previous.Slow;
-            var alerts = Alerts(config, fast, slow, previous.Alerts, now);
+            var alerts = Alerts(config, fast, slow, missing, previous.Alerts, now);
             if (previous.Online == false)
                 events.Add(Raise(config, now, EventKind.DatabaseUp, "the instance answers again"));
             foreach (var alert in alerts.Where(alert => previous.Alerts.All(old => old.Key != alert.Key)))
@@ -247,7 +249,7 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
         if (Connection(config) is not { } connection)
             throw new InvalidOperationException("The password in the configuration cannot be read on this machine");
 
-        var queries = await source.ExpensiveAsync(connection, _stopping.Token);
+        var queries = await source.ExpensiveAsync(connection, config.Databases, _stopping.Token);
         lock (_gate)
             _expensive = (queries, now);
         return queries;
@@ -265,7 +267,61 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
         return new DatabaseConnection(config.Server, config.User, password, config.Encrypt, config.TrustServerCertificate);
     }
 
-    private static List<DatabaseAlert> Alerts(DatabaseConfig config, FastSample fast, SlowSample? slow, IReadOnlyList<DatabaseAlert> before, DateTimeOffset now)
+    private static bool Watched(DatabaseConfig config, string database) =>
+        config.Databases.Count == 0 || config.Databases.Contains(database, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The databases the configuration names that the instance does not have.
+    /// </summary>
+    private static List<string> Missing(DatabaseConfig config, FastSample fast) =>
+        fast.Databases is { } all ? [.. config.Databases.Where(name => all.All(database => !database.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))] : [];
+
+    /// <summary>
+    /// Only what is of the databases the configuration names, when it names any: an instance
+    /// is often shared with what belongs to other environments. Whoever keeps a session of
+    /// theirs waiting stays, whatever database it is in.
+    /// </summary>
+    private static FastSample Scope(DatabaseConfig config, FastSample fast)
+    {
+        if (config.Databases.Count == 0)
+            return fast;
+        var activity = fast.Activity?.Where(item => Watched(config, item.Database)).ToList();
+        if (activity is not null)
+        {
+            var kept = activity.Select(item => item.SessionId).ToHashSet();
+            // Up the chain: who blocks whoever blocks them.
+            for (var added = true; added;)
+            {
+                added = false;
+                foreach (var blocker in fast.Activity!.Where(item => !kept.Contains(item.SessionId) && activity.Any(waiting => waiting.BlockedBy == item.SessionId)).ToList())
+                {
+                    activity.Add(blocker);
+                    kept.Add(blocker.SessionId);
+                    added = true;
+                }
+            }
+        }
+        return fast with
+        {
+            Databases = fast.Databases?.Where(database => Watched(config, database.Name)).ToList(),
+            Sessions = fast.Sessions?.Where(group => Watched(config, group.Database)).ToList(),
+            Activity = activity
+        };
+    }
+
+    private static SlowSample Scope(DatabaseConfig config, SlowSample slow)
+    {
+        if (config.Databases.Count == 0)
+            return slow;
+        return slow with
+        {
+            // The temporary database is used by every other one.
+            Volumes = slow.Volumes?.Where(volume => volume.Databases.Count == 0 || volume.Databases.Any(name => Watched(config, name) || name.Equals("tempdb", StringComparison.OrdinalIgnoreCase))).ToList(),
+            Backups = slow.Backups?.Where(backup => Watched(config, backup.Database)).ToList()
+        };
+    }
+
+    private static List<DatabaseAlert> Alerts(DatabaseConfig config, FastSample fast, SlowSample? slow, IReadOnlyList<string> missing, IReadOnlyList<DatabaseAlert> before, DateTimeOffset now)
     {
         var alerts = new List<DatabaseAlert>();
         void Add(string kind, string subject, string severity, double? value)
@@ -273,6 +329,9 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             var since = before.FirstOrDefault(alert => alert.Kind == kind && alert.Subject == subject)?.Since ?? now;
             alerts.Add(new DatabaseAlert(kind, subject, severity, value, since));
         }
+
+        foreach (var name in missing)
+            Add("Missing", name, "danger", null);
 
         foreach (var database in fast.Databases ?? [])
             if (!database.State.Equals("ONLINE", StringComparison.OrdinalIgnoreCase))
@@ -303,6 +362,7 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
 
     private static string Describe(DatabaseAlert alert) => alert.Kind switch
     {
+        "Missing" => $"the instance has no database called {alert.Subject}",
         "State" => $"the database {alert.Subject} is not online",
         "Blocking" => $"a session has been kept waiting by another for {alert.Value:0} s",
         "Disk" => $"the disk {alert.Subject} has {alert.Value:0.#}% free",
