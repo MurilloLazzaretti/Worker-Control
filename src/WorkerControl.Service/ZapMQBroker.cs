@@ -93,6 +93,19 @@ internal sealed class ZapMQBroker : IBroker, IDisposable
     public bool SendSafeStop(int processId) =>
         Guarded(() => _publisher.SendMessage(processId + "SS", new { Text = "STOP" }, 10000));
 
+    /// <summary>
+    /// Sends a message that expects an answer nobody here is going to read. False when it
+    /// could not be sent.
+    /// </summary>
+    public bool Ask(string queue, object body, int timeoutMs) =>
+        Guarded(() => _publisher.SendRPCMessage(queue, body, _ => { }, timeoutMs));
+
+    /// <summary>
+    /// Sends a message. False when it could not be sent.
+    /// </summary>
+    public bool Tell(string queue, object body, int ttlMs) =>
+        Guarded(() => _publisher.SendMessage(queue, body, ttlMs));
+
     public bool HealthySince(DateTimeOffset instant)
     {
         var success = Interlocked.Read(ref _lastSuccess);

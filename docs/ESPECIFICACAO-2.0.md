@@ -1,7 +1,7 @@
 # Worker Control 2.0 — Especificação
 
-Situação: aprovada em 2026-10-07. Etapas 1 e 2 implementadas. A etapa 1 está em uso no ambiente de desenvolvimento desde 2026-10-07.
-Última revisão: 2026-10-07.
+Situação: aprovada em 2026-10-07. Etapas 1, 2 e 3 implementadas. A etapa 1 está em uso no ambiente de desenvolvimento desde 2026-10-07.
+Última revisão: 2026-10-08.
 
 Este documento especifica o serviço Worker Control 2.0, reescrito em .NET. Corresponde à fase 8 do [plano do ZapMQ 2.0](https://github.com/MurilloLazzaretti/ZapMQ/blob/main/docs/PLANO-2.0.md) e detalha a seção 11 dele. O painel web, onde o Worker Control ganha uma seção, é especificado junto com o ZapMQ 2.2.
 
@@ -236,8 +236,34 @@ Têm o campo `Command` em vez de `Message`, e `Version` com a versão do contrat
 | `Events` | Histórico, com filtro por grupo, tipo e período |
 | `Health` | Medições de um worker ou grupo |
 | `DetachAndStop` | Para o serviço deixando os workers rodando (seção 12.2) |
+| `StartTrace` / `StopTrace` | Repassa a uma fila o trace de um worker que só conhece o trace da 1.x (seção 11.3) |
 
 Resposta: `{"Ok": true, ...}` ou `{"Ok": false, "Error": {"Code": "...", "Message": "..."}}`.
+
+### 11.3 Trace
+
+O trace de um worker é acompanhado pelo painel do ZapMQ, de qualquer máquina. Há dois caminhos, e quem assiste não precisa saber qual está em uso.
+
+**Worker com o wrapper .NET 2.0.** O painel pede o trace ao próprio worker, pela fila `<pid>TR` que ele já consome:
+
+| Mensagem em `<pid>TR` | Efeito |
+|---|---|
+| `{"message": "start zapmq trace", "queue": "<fila>", "lease": 30}` | O worker passa a publicar em `<fila>` o que a aplicação escrever com `Trace()`. Responde `{"message": "on"}` |
+| `{"message": "stop zapmq trace"}` | Para de publicar |
+| `{"message": "start trace", "port": N}` | O trace da 1.x, por socket, como sempre foi |
+
+O worker publica em lotes, a cada 250 ms: `{"ProcessId": "<pid>", "Dropped": n, "Lines": [{"Seq": n, "At": "<UTC>", "Text": "..."}]}`. `Dropped` é quantas linhas ele descartou antes do lote, por falta de espaço (guarda no máximo 5.000) ou de conexão. O pedido vale por `lease` segundos; quem assiste o repete, e sem repetição o trace se desliga sozinho. Com o trace desligado, `Trace()` não faz nada.
+
+**Worker em Delphi ou com wrapper anterior.** Só conhece o trace por socket na própria máquina. O painel pede então ao Worker Control:
+
+| Comando | Campos | Efeito |
+|---|---|---|
+| `StartTrace` | `ProcessId`, `Queue`, `LeaseSeconds` (padrão 30) | O serviço abre uma porta local, manda ao worker o `start trace` da 1.x e publica em `Queue`, no formato acima, o que chegar pela porta. Repetido, renova o prazo |
+| `StopTrace` | `ProcessId` | Desliga |
+
+Só vale para worker mantido pelo serviço (`not-found` para os demais); `trace-failed` quando o worker não se conecta à porta. O texto que chega pelo socket não tem separador: o que chega junto é mostrado junto. É lido como UTF-8 e, se não for, como ANSI, que é o que o wrapper Delphi envia.
+
+O trace é descartável: as filas em que ele trafega (`zapmq.trace.<pid>`) não geram mensagens mortas no ZapMQ, e o que ninguém consome some em segundos.
 
 A publicação das alterações de estado para o painel atualizar a tela sem consultar a cada instante fica para a etapa 4, junto com o painel. Publicada numa fila sem consumidor, cada alteração viraria uma mensagem morta no ZapMQ 2.1; a forma de entrega é definida com quem vai consumir.
 

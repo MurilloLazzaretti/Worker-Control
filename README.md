@@ -9,7 +9,7 @@
 | 2.x (.NET) | this branch (`main`) | in development |
 | 1.x (Delphi) | branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1), last tag [`v1.1.1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.1) | maintenance |
 
-Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). So far the service is done, with its history and its administration over ZapMQ. Management Studio 1.x keeps working against it until the web panel exists.
+Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). The service is done, with its history and its administration over ZapMQ, and is operated from the web panel of [ZapMQ](https://github.com/MurilloLazzaretti/ZapMQ) 2.2: groups and processes live, actions, configuration, history and the trace of each process. Management Studio 1.x keeps working against it.
 
 ## 🧬 Resources
 

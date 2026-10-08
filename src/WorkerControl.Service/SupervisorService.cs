@@ -36,6 +36,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private WorkerControlConfig? _config;
     private Supervisor? _supervisor;
     private ZapMQBroker? _broker;
+    private TraceRelay? _trace;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -52,6 +53,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         using var queues = new QueueMonitor(config.ZapMQHost, config.ZapMQPort, loggers.CreateLogger("WorkerControl.ZapMQ"));
         using var broker = new ZapMQBroker(config.ZapMQHost, config.ZapMQPort, time, loggers.CreateLogger("WorkerControl.ZapMQ"), Administer);
         _broker = broker;
+        using var trace = new TraceRelay(broker, time, loggers.CreateLogger("WorkerControl.Trace"));
+        _trace = trace;
         var supervisor = new Supervisor(new ProcessHost(), broker, time, queues);
         supervisor.Event += Record;
         _supervisor = supervisor;
@@ -412,6 +415,24 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     request.Value<string>("Group"), request.Value<int?>("ProcessId"),
                     request.Value<DateTimeOffset?>("From"), request.Value<DateTimeOffset?>("To"),
                     request.Value<int?>("Limit") ?? 1000));
+
+            case "StartTrace":
+            {
+                if (request.Value<int?>("ProcessId") is not { } processId || request.Value<string>("Queue") is not { Length: > 0 } queue)
+                    return Admin.Error("invalid-request", "\"ProcessId\" and \"Queue\" are required");
+                if (!supervisor.GetStatus().Any(group => group.Workers.Any(worker => worker.ProcessId == processId)))
+                    return Admin.Error("not-found", $"There is no worker with process id {processId}");
+                var lease = TimeSpan.FromSeconds(Math.Clamp(request.Value<int?>("LeaseSeconds") ?? 30, 1, 300));
+                return _trace!.Start(processId, queue, lease) is { } problem ? Admin.Error("trace-failed", problem) : Admin.Ok();
+            }
+
+            case "StopTrace":
+            {
+                if (request.Value<int?>("ProcessId") is not { } processId)
+                    return Admin.Error("invalid-request", "\"ProcessId\" is required");
+                _trace!.Stop(processId);
+                return Admin.Ok();
+            }
 
             case "DetachAndStop":
                 File.WriteAllText(Path.Combine(_directory, DetachFile), "");
