@@ -255,4 +255,22 @@ public class ConfigTests
         Assert.Contains("Server", error.Message);
         Assert.Null(ConfigReader.Parse("""{ "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [] }""").Database);
     }
+
+    [Fact]
+    public void The_transport_has_its_defaults_and_its_targets()
+    {
+        var plain = ConfigReader.Parse("""{ "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [] }""").Transport;
+        Assert.Equal(("transport", 3), (plain.Directory, plain.KeepVersions));
+        Assert.Contains("appsettings*.json", plain.Keep);
+
+        var said = ConfigReader.Parse("""
+            { "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [],
+              "Transport": { "KeepVersions": 5, "Keep": ["*.ini"], "Targets": [ { "Kind": "API", "Name": " Orders ", "Paths": ["D:\\www\\orders"], "Sites": ["Orders 1"] } ] } }
+            """).Transport;
+        var target = Assert.Single(said.Targets);
+        Assert.Equal(("api", "Orders", 5), (target.Kind, target.Name, said.KeepVersions));
+        Assert.Equal(["*.ini"], said.Keep);
+        Assert.Null(target.Keep);
+        Assert.Throws<ConfigException>(() => ConfigReader.Parse("""{ "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [], "Transport": { "Targets": [ { "Kind": "database", "Name": "x" } ] } }"""));
+    }
 }

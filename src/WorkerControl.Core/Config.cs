@@ -56,6 +56,62 @@ public sealed record WorkerControlConfig
     /// The database instance of this environment, watched from here. Null watches none.
     /// </summary>
     public DatabaseConfig? Database { get; init; }
+
+    /// <summary>
+    /// How what a package of changes brings is put in place on this machine.
+    /// </summary>
+    public TransportConfig Transport { get; init; } = new();
+}
+
+/// <summary>
+/// The replacing of what runs on this machine by what a package of changes brings.
+/// </summary>
+public sealed record TransportConfig
+{
+    public static readonly IReadOnlyList<string> DefaultKeep = ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.db", "*.db-wal", "*.db-shm", "logs/"];
+
+    /// <summary>
+    /// Where the copies of what was replaced are kept, relative to the data folder unless it is a full path.
+    /// </summary>
+    public string Directory { get; init; } = "transport";
+
+    /// <summary>
+    /// How many replaced versions of each target are kept, to go back to.
+    /// </summary>
+    public int KeepVersions { get; init; } = 3;
+
+    /// <summary>
+    /// What belongs to the environment and is never taken into a package nor replaced by one:
+    /// file names with wildcards, and folders written with a slash at the end.
+    /// </summary>
+    public IReadOnlyList<string> Keep { get; init; } = DefaultKeep;
+
+    /// <summary>
+    /// The targets that cannot be worked out from the rest of the configuration, or that are
+    /// to be said otherwise.
+    /// </summary>
+    public IReadOnlyList<TransportTargetConfig> Targets { get; init; } = [];
+}
+
+/// <summary>
+/// Something a package may replace: a kind (worker, service, api or frontend), the name it has
+/// in every environment and where it is on this machine.
+/// </summary>
+public sealed record TransportTargetConfig
+{
+    public required string Kind { get; init; }
+    public required string Name { get; init; }
+    public IReadOnlyList<string> Paths { get; init; } = [];
+
+    /// <summary>
+    /// What is kept in this target, in place of the general list.
+    /// </summary>
+    public IReadOnlyList<string>? Keep { get; init; }
+
+    /// <summary>
+    /// The sites of the web server that serve it, for an api.
+    /// </summary>
+    public IReadOnlyList<string> Sites { get; init; } = [];
 }
 
 /// <summary>
@@ -428,7 +484,8 @@ public static class ConfigReader
                 Services = ReadServices(root),
                 Frontends = ReadFrontends(root),
                 Traffic = ReadTraffic(root),
-                Database = ReadDatabase(root)
+                Database = ReadDatabase(root),
+                Transport = ReadTransport(root)
             };
             return config;
         }
@@ -559,6 +616,52 @@ public static class ConfigReader
             GroupBy = traffic.TryGetProperty("GroupBy", out _) ? Texts("GroupBy") : ["api", "mfe"],
             Routes = Texts("Routes"),
             Ignore = Texts("Ignore")
+        };
+    }
+
+    private static TransportConfig ReadTransport(JsonElement root)
+    {
+        if (!root.TryGetProperty("Transport", out var transport) || transport.ValueKind == JsonValueKind.Null)
+            return new TransportConfig();
+        if (transport.ValueKind != JsonValueKind.Object)
+            throw new ConfigException("\"Transport\" must be an object");
+        const string where = "\"Transport\"";
+
+        static List<string>? Texts(JsonElement element, string name, string where)
+        {
+            if (!element.TryGetProperty(name, out var array) || array.ValueKind == JsonValueKind.Null)
+                return null;
+            if (array.ValueKind != JsonValueKind.Array || array.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+                throw new ConfigException($"\"{name}\" must be a list of texts in {where}");
+            return [.. array.EnumerateArray().Select(item => item.GetString()!.Trim()).Where(item => item.Length > 0)];
+        }
+
+        var targets = new List<TransportTargetConfig>();
+        if (transport.TryGetProperty("Targets", out var list) && list.ValueKind != JsonValueKind.Null)
+        {
+            if (list.ValueKind != JsonValueKind.Array)
+                throw new ConfigException($"\"Targets\" must be a list in {where}");
+            foreach (var item in list.EnumerateArray())
+            {
+                const string inTarget = "a target of \"Transport\"";
+                if (item.ValueKind != JsonValueKind.Object)
+                    throw new ConfigException($"Every target must be an object in {where}");
+                var kind = Text(item, "Kind", inTarget)?.Trim().ToLowerInvariant();
+                var name = Text(item, "Name", inTarget)?.Trim();
+                if (kind is not ("worker" or "service" or "api" or "frontend"))
+                    throw new ConfigException($"\"Kind\" must be worker, service, api or frontend in {inTarget}");
+                if (string.IsNullOrEmpty(name))
+                    throw new ConfigException($"\"Name\" is required in {inTarget}");
+                targets.Add(new TransportTargetConfig { Kind = kind, Name = name, Paths = Texts(item, "Paths", inTarget) ?? [], Keep = Texts(item, "Keep", inTarget), Sites = Texts(item, "Sites", inTarget) ?? [] });
+            }
+        }
+
+        return new TransportConfig
+        {
+            Directory = Text(transport, "Directory", where) is { Length: > 0 } directory ? directory.Trim() : "transport",
+            KeepVersions = Integer(transport, "KeepVersions", where, defaultValue: 3, minimum: 0),
+            Keep = Texts(transport, "Keep", where) ?? TransportConfig.DefaultKeep,
+            Targets = targets
         };
     }
 

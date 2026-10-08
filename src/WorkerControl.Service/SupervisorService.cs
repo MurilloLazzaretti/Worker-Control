@@ -5,6 +5,7 @@ using Newtonsoft.Json.Linq;
 using WorkerControl.Core;
 using WorkerControl.Service.Database;
 using WorkerControl.Service.Traffic;
+using WorkerControl.Service.Transport;
 
 namespace WorkerControl.Service;
 
@@ -13,7 +14,7 @@ namespace WorkerControl.Service;
 /// second, records what happens and answers whoever administers the service. When the service
 /// stops, it stops the workers too.
 /// </summary>
-internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets, IDatabaseWriter databaseWriter) : BackgroundService
+internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets, IDatabaseWriter databaseWriter, IWebServer webServer) : BackgroundService
 {
     /// <summary>
     /// A file of this name in the data folder when the service stops means: leave the workers
@@ -43,6 +44,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private FrontendWatcher? _frontends;
     private TrafficCollector? _traffic;
     private DatabaseMonitor? _database;
+    private TransportWork? _transport;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -87,6 +89,11 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         database.Event += Record;
         database.ApplyConfig(config.Database);
         _database = database;
+
+        var transportDirectory = Path.GetFullPath(config.Transport.Directory, _directory);
+        var targets = new TargetCatalog(() => _config, services, network, () => _frontends?.Snapshot().Apps ?? []);
+        _transport = new TransportWork(targets, new Deployer(new GroupSwitch(this), services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport")),
+            () => _config, transportDirectory, time);
 
         Record(EventKind.ServiceStarted, $"version {ServiceHost.Version}");
         supervisor.ApplyConfig(config);
@@ -468,6 +475,28 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 }
             }
 
+            case "TransportTargets":
+                return _transport!.Targets();
+
+            case "TransportTarget":
+                return _transport!.Target(request.Value<string>("Kind"), request.Value<string>("Name"));
+
+            case "TransportCapture":
+                return _transport!.Capture(request.Value<string>("Kind"), request.Value<string>("Name"));
+
+            case "TransportDeploy":
+            {
+                if (request.Value<string>("Package") is not { Length: > 0 } package || request.Value<int?>("Item") is not { } item)
+                    return Admin.Error("invalid-request", "\"Package\" and \"Item\" are required");
+                var kind = request.Value<string>("Kind");
+                var name = request.Value<string>("Name");
+                var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, lifetime.ApplicationStopping);
+                if (answer.Value<bool>("Ok"))
+                    Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
+                        $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "replaced" : "not replaced, " + answer.Value<string>("Problem"))}" + by);
+                return answer;
+            }
+
             case "DatabaseApply":
             {
                 string? Text(string name) => request.Value<string>(name) is { Length: > 0 } value ? value : null;
@@ -689,6 +718,32 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         {
             _logger.LogError("The traffic is not being kept, because its file could not be opened: {Error}", error.Message);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The groups turned off and on the way an administrator does it: in the configuration
+    /// file, which the supervisor then reads.
+    /// </summary>
+    private sealed class GroupSwitch(SupervisorService service) : IGroupSwitch
+    {
+        public bool Enable(string group, bool enabled, string why)
+        {
+            if (!service._file.ChangeGroup(group, item => item["Enabled"] = enabled))
+                return false;
+            service.Record(EventKind.ManualAction, (enabled ? "group enabled: " : "group disabled: ") + why, group);
+            Interlocked.Exchange(ref service._reloadRequested, 1);
+            return true;
+        }
+
+        public (bool Enabled, int Processes, int Up, int Desired)? Look(string group)
+        {
+            // What the file says, which is what was asked; and what the supervisor has, which is what there is.
+            var asked = service._config?.Groups.FirstOrDefault(item => item.Name == group);
+            var status = service._supervisor?.GetStatus().FirstOrDefault(item => item.Config.Name == group);
+            if (asked is null || status is null)
+                return null;
+            return (status.Config.Enabled, status.Workers.Count, status.Workers.Count(worker => worker.State == WorkerState.Up), status.Config.Enabled ? status.DesiredWorkers : 0);
         }
     }
 
