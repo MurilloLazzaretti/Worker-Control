@@ -126,6 +126,28 @@ internal static class TrafficAnswers
         }));
     });
 
+    /// <summary>
+    /// The screens the requests came from and, for each name given, how much the screens
+    /// under that name were used.
+    /// </summary>
+    public static JObject Pages(TrafficStore store, DateTimeOffset from, DateTimeOffset to, string? host, string? search, int limit, IReadOnlyList<string> names) => Admin.Ok(answer =>
+    {
+        answer["From"] = from;
+        answer["To"] = to;
+        answer["Pages"] = new JArray(store.Pages(from, to, host, search, limit).Select(page => new JObject
+        {
+            ["Host"] = page.Host,
+            ["Page"] = page.Page,
+            ["Count"] = page.Count,
+            ["Users"] = page.Users
+        }));
+        answer["Named"] = new JArray(names.Take(100).Select(name =>
+        {
+            var (count, users) = store.PagesNamed(from, to, host, name);
+            return new JObject { ["Name"] = name, ["Count"] = count, ["Users"] = users };
+        }));
+    });
+
     public static JObject Errors(TrafficStore store, TrafficFilter filter, int limit) => Admin.Ok(answer =>
         answer["Errors"] = new JArray(store.Errors(limit, filter).Select(error => new JObject
         {

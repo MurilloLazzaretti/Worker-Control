@@ -237,7 +237,7 @@ Têm o campo `Command` em vez de `Message`, e `Version` com a versão do contrat
 | `Health` | Medições de um worker ou grupo |
 | `DetachAndStop` | Para o serviço deixando os workers rodando (seção 12.2) |
 | `StartTrace` / `StopTrace` | Repassa a uma fila o trace de um worker que só conhece o trace da 1.x (seção 11.3) |
-| `Frontends`, `Traffic`, `TrafficRoutes`, `TrafficErrors` | Os módulos da aplicação web publicada na máquina e o tráfego lido do log do proxy reverso, também especificados em Monitoramento do ambiente |
+| `Frontends`, `Traffic`, `TrafficRoutes`, `TrafficPages`, `TrafficErrors` | Os módulos da aplicação web publicada na máquina e o tráfego lido do log do proxy reverso, também especificados em Monitoramento do ambiente |
 | `ListServices`, `StartService`, `StopService`, `RestartService` | Serviços do Windows acompanhados sem serem iniciados pelo Worker Control. Especificados em [Monitoramento do ambiente](https://github.com/MurilloLazzaretti/ZapMQ/blob/main/docs/AMBIENTE.md); a versão do contrato passa a 2 e `Status` ganha `Services` |
 
 Resposta: `{"Ok": true, ...}` ou `{"Ok": false, "Error": {"Code": "...", "Message": "..."}}`.

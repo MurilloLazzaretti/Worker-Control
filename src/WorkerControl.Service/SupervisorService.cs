@@ -355,6 +355,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
             case "Traffic" when _traffic is null:
             case "TrafficRoutes" when _traffic is null:
+            case "TrafficPages" when _traffic is null:
             case "TrafficErrors" when _traffic is null:
                 return Admin.Error("history-unavailable", "The traffic is not being kept on this machine; see the log of the service");
 
@@ -368,6 +369,14 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             {
                 var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
                 return TrafficAnswers.Routes(_traffic!.Store, from, to, TrafficAnswers.Filter(request), request.Value<string>("Search"), request.Value<string>("Sort"), request.Value<int?>("Limit") ?? 100);
+            }
+
+            case "TrafficPages":
+            {
+                var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
+                var names = (request["Names"] as JArray)?.Select(name => name.ToString()).Where(name => name.Length > 0).ToList() ?? [];
+                return TrafficAnswers.Pages(_traffic!.Store, from, to, request.Value<string>("Host") is { Length: > 0 } host ? host : null,
+                    request.Value<string>("Search"), request.Value<int?>("Limit") ?? 50, names);
             }
 
             case "TrafficErrors":

@@ -41,6 +41,7 @@ internal sealed class TrafficCollector(string directory, TrafficStore store, Tim
 
     // Routes counted today, to stop counting new ones past the limit.
     private readonly HashSet<string> _routesToday = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _pagesToday = new(StringComparer.Ordinal);
     private long _day;
 
     private TrafficSource _source = new("", false, 0, 0, null, 0, 0, null);
@@ -206,6 +207,8 @@ internal sealed class TrafficCollector(string directory, TrafficStore store, Tim
         var tallies = new Dictionary<(long, RouteKey), Tally>();
         var addresses = new HashSet<(long, string, string, string, string)>();
         var errors = new List<StoredError>();
+        var pages = new Dictionary<(long, string, string), long>();
+        var pageAddresses = new HashSet<(long, string, string, string)>();
 
         while (lines.Length > 0)
         {
@@ -235,6 +238,7 @@ internal sealed class TrafficCollector(string directory, TrafficStore store, Tim
             {
                 _day = day;
                 _routesToday.Clear();
+                _pagesToday.Clear();
             }
             if (!_routesToday.Contains(hit.Host + hit.Method + route))
             {
@@ -252,12 +256,31 @@ internal sealed class TrafficCollector(string directory, TrafficStore store, Tim
             if (hit.Ip.Length > 0)
                 addresses.Add((seconds / TrafficStore.Hour * TrafficStore.Hour, hit.Host, kind, app, hit.Ip));
 
+            // Which screen asked: what tells how much each part of the web application is used.
+            // A browser only says the screen to the site the screen is of; to another site (an
+            // API under another name) it says the site alone, which tells nothing and is left out.
+            if (TrafficLog.Page(hit.Referer) is var (pageHost, page) && page != "/"
+                && !config.Ignore.Any(prefix => (page + "/").StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!_pagesToday.Contains(pageHost + page))
+                {
+                    if (_pagesToday.Count < config.MaxRoutes)
+                        _pagesToday.Add(pageHost + page);
+                    else
+                        page = Others;
+                }
+                var hour = seconds / TrafficStore.Hour * TrafficStore.Hour;
+                pages[(hour, pageHost, page)] = pages.GetValueOrDefault((hour, pageHost, page)) + 1;
+                if (hit.Ip.Length > 0)
+                    pageAddresses.Add((hour, pageHost, page, hit.Ip));
+            }
+
             if (hit.Status >= 500 && config.KeepErrors > 0)
                 errors.Add(new StoredError(hit.At, hit.Host, hit.Method, hit.Path, route, app, hit.Status, hit.Upstream, Math.Round(hit.Seconds * 1000, 1)));
         }
 
         if (tallies.Count > 0)
-            store.Add(tallies, addresses, errors, config.KeepErrors);
+            store.Add(tallies, addresses, errors, config.KeepErrors, pages, pageAddresses);
     }
 
     /// <summary>

@@ -50,7 +50,7 @@ public sealed class TrafficTests : IDisposable
     }
 
     private static string Line(string path, int status = 200, double seconds = 0.012, string ip = "10.0.0.1", string method = "GET", string host = "api.test",
-        string upstream = "127.0.0.1:9002", DateTimeOffset? at = null) =>
+        string upstream = "127.0.0.1:9002", DateTimeOffset? at = null, string referer = "") =>
         new JObject
         {
             ["t"] = (at ?? Noon).ToString("yyyy-MM-ddTHH:mm:sszzz"),
@@ -65,7 +65,7 @@ public sealed class TrafficTests : IDisposable
             ["ua"] = upstream,
             ["us"] = status.ToString(),
             ["ut"] = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["ref"] = ""
+            ["ref"] = referer
         }.ToString(Newtonsoft.Json.Formatting.None);
 
     private void Write(params string[] lines) => File.AppendAllText(_log, string.Join("\n", lines) + "\n");
@@ -116,6 +116,8 @@ public sealed class TrafficTests : IDisposable
     [InlineData("/assets/mf.manifest.json", "/assets/*.json", "static", "assets")]
     [InlineData("/zapmq/api/workers/status", "/zapmq/api/workers/status", "api", "zapmq")]
     [InlineData("/api/v2/orders", "/api/v2/orders", "api", "api/v2")]
+    [InlineData("/api/admin/download/EP.04.00.001_15.docx", "/api/admin/download/{arquivo}", "api", "api/admin")]
+    [InlineData("/api/relatorio/arquivo/planilha final.xlsx", "/api/relatorio/arquivo/{arquivo}", "api", "api/relatorio")]
     public void A_path_is_counted_as_its_route(string path, string route, string kind, string app) =>
         Assert.Equal((route, kind, app), TrafficLog.Normalize(path, ["api", "mfe"], []));
 
@@ -362,5 +364,51 @@ public sealed class TrafficTests : IDisposable
 
         var routes = TrafficAnswers.Routes(_store, Noon.AddMinutes(-30), Noon.AddMinutes(30), new TrafficFilter(), null, null, 10);
         Assert.Equal("GET", (string)Assert.Single(routes["Routes"]!)["Method"]!);
+    }
+
+    [Theory]
+    [InlineData("http://App.Test/home/producao/rastreabilidade?lote=VG000017&tirada=29", "app.test", "/home/producao/rastreabilidade")]
+    [InlineData("https://app.test/home/pedidos/48213/itens#topo", "app.test", "/home/pedidos/{id}/itens")]
+    [InlineData("http://app.test/", "app.test", "/")]
+    public void The_screen_a_request_came_from_is_kept_without_what_identifies_the_visit(string referer, string host, string page) =>
+        Assert.Equal((host, page), TrafficLog.Page(referer));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("-")]
+    [InlineData("android-app://com.example")]
+    public void A_referer_that_is_not_a_page_is_nothing(string referer) =>
+        Assert.Null(TrafficLog.Page(referer));
+
+    [Fact]
+    public void The_screens_are_counted_by_what_is_asked_from_them_and_the_people_on_them()
+    {
+        var collector = Collector(Config(ignore: ["/painel/"]));
+        Write(
+            Line("/mfe/producao/version.json", ip: "10.0.0.1", referer: "http://app.test/home/producao/rastreabilidade?lote=1", upstream: ""),
+            Line("/mfe/producao/version.json", ip: "10.0.0.2", referer: "http://app.test/home/producao/rastreabilidade?lote=2", upstream: ""),
+            Line("/api/producao/ordem", ip: "10.0.0.1", referer: "http://app.test/home/producao/ordens"),
+            Line("/mfe/cadastro/main.abc.js", ip: "10.0.0.3", referer: "http://app.test/home/cadastro/materiais", upstream: ""),
+            // To another site the browser says the site alone; that is no screen. Nor is an ignored path, or no referer.
+            Line("/api/producao/lote/7", ip: "10.0.0.9", host: "api.test", referer: "http://app.test/"),
+            Line("/api/x", ip: "10.0.0.9", referer: "http://app.test/painel/telas"),
+            Line("/api/y", ip: "10.0.0.9"));
+        collector.Collect();
+
+        var pages = TrafficAnswers.Pages(_store, Noon.AddMinutes(-30), Noon.AddMinutes(30), null, null, 10, ["producao", "cadastro", "qualidade", "prod"]);
+
+        Assert.Equal(["/home/producao/rastreabilidade", "/home/cadastro/materiais", "/home/producao/ordens"],
+            pages["Pages"]!.OrderByDescending(page => (long)page["Count"]!).ThenBy(page => (string)page["Page"]!).Select(page => (string)page["Page"]!));
+        Assert.Equal(2, (long)pages["Pages"]!.Single(page => (string)page["Page"]! == "/home/producao/rastreabilidade")["Users"]!);
+
+        var named = pages["Named"]!.ToDictionary(item => (string)item["Name"]!, item => ((long)item["Count"]!, (long)item["Users"]!));
+        Assert.Equal((3, 2), named["producao"]);
+        Assert.Equal((1, 1), named["cadastro"]);
+        Assert.Equal((0, 0), named["qualidade"]);
+        // Part of a name is not the name.
+        Assert.Equal((0, 0), named["prod"]);
+
+        var searched = TrafficAnswers.Pages(_store, Noon.AddMinutes(-30), Noon.AddMinutes(30), "app.test", "ordens", 10, []);
+        Assert.Equal("/home/producao/ordens", (string)Assert.Single(searched["Pages"]!)["Page"]!);
     }
 }

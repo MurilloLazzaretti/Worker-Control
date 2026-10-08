@@ -124,6 +124,12 @@ internal sealed class TrafficStore : IDisposable
             CREATE TABLE IF NOT EXISTS traffic_ip (
                 at INTEGER NOT NULL, host TEXT NOT NULL, kind TEXT NOT NULL, app TEXT NOT NULL, ip TEXT NOT NULL,
                 PRIMARY KEY (at, host, kind, app, ip)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS traffic_page (
+                at INTEGER NOT NULL, host TEXT NOT NULL, page TEXT NOT NULL, count INTEGER NOT NULL,
+                PRIMARY KEY (at, host, page)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS traffic_page_ip (
+                at INTEGER NOT NULL, host TEXT NOT NULL, page TEXT NOT NULL, ip TEXT NOT NULL,
+                PRIMARY KEY (at, host, page, ip)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS traffic_error (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, host TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL,
                 route TEXT NOT NULL, app TEXT NOT NULL, status INTEGER NOT NULL, upstream TEXT NOT NULL, rt REAL NOT NULL);
@@ -134,11 +140,42 @@ internal sealed class TrafficStore : IDisposable
     /// Adds what was counted since the last time. Everything goes in, or nothing does.
     /// </summary>
     public void Add(IReadOnlyDictionary<(long Minute, RouteKey Key), Tally> tallies, IReadOnlyCollection<(long Hour, string Host, string Kind, string App, string Ip)> addresses,
-        IReadOnlyList<StoredError> errors, int keepErrors)
+        IReadOnlyList<StoredError> errors, int keepErrors,
+        IReadOnlyDictionary<(long Hour, string Host, string Page), long>? pages = null, IReadOnlyCollection<(long Hour, string Host, string Page, string Ip)>? pageAddresses = null)
     {
         lock (_gate)
         {
             using var transaction = _connection.BeginTransaction();
+
+            if (pages is { Count: > 0 })
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "INSERT INTO traffic_page (at, host, page, count) VALUES ($at, $host, $page, $count) ON CONFLICT DO UPDATE SET count = count + excluded.count";
+                var at = command.Parameters.Add("$at", SqliteType.Integer);
+                var host = command.Parameters.Add("$host", SqliteType.Text);
+                var page = command.Parameters.Add("$page", SqliteType.Text);
+                var count = command.Parameters.Add("$count", SqliteType.Integer);
+                foreach (var (key, value) in pages)
+                {
+                    (at.Value, host.Value, page.Value, count.Value) = (key.Hour, key.Host, key.Page, value);
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            if (pageAddresses is { Count: > 0 })
+            {
+                using var command = _connection.CreateCommand();
+                command.CommandText = "INSERT OR IGNORE INTO traffic_page_ip (at, host, page, ip) VALUES ($at, $host, $page, $ip)";
+                var at = command.Parameters.Add("$at", SqliteType.Integer);
+                var host = command.Parameters.Add("$host", SqliteType.Text);
+                var page = command.Parameters.Add("$page", SqliteType.Text);
+                var ip = command.Parameters.Add("$ip", SqliteType.Text);
+                foreach (var address in pageAddresses)
+                {
+                    (at.Value, host.Value, page.Value, ip.Value) = (address.Hour, address.Host, address.Page, address.Ip);
+                    command.ExecuteNonQuery();
+                }
+            }
 
             using (var command = _connection.CreateCommand())
             {
@@ -237,6 +274,8 @@ internal sealed class TrafficStore : IDisposable
                 DELETE FROM traffic WHERE res = {Minute} AND at < {minutesBefore};
                 DELETE FROM traffic WHERE at < {before};
                 DELETE FROM traffic_ip WHERE at < {before};
+                DELETE FROM traffic_page WHERE at < {before};
+                DELETE FROM traffic_page_ip WHERE at < {before};
                 """);
             transaction.Commit();
         }
@@ -334,6 +373,73 @@ internal sealed class TrafficStore : IDisposable
             }
             return (all, byApp);
         }
+    }
+
+    /// <summary>
+    /// The screens the requests came from in a period: how many requests each one made, and
+    /// from how many different addresses.
+    /// </summary>
+    public List<(string Host, string Page, long Count, long Users)> Pages(DateTimeOffset from, DateTimeOffset to, string? host, string? search, int limit)
+    {
+        lock (_gate)
+        {
+            using var command = _connection.CreateCommand();
+            var where = PageWhere(command, from, to, host);
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                where += " AND p.page LIKE $search";
+                command.Parameters.AddWithValue("$search", "%" + search.Trim().Replace("%", "") + "%");
+            }
+            command.CommandText = $"""
+                SELECT p.host, p.page, SUM(p.count),
+                    (SELECT COUNT(DISTINCT i.ip) FROM traffic_page_ip i WHERE i.host = p.host AND i.page = p.page AND i.at >= $from AND i.at < $to)
+                FROM traffic_page p WHERE {where}
+                GROUP BY p.host, p.page ORDER BY SUM(p.count) DESC LIMIT {Math.Clamp(limit, 1, 500)}
+                """;
+            var pages = new List<(string, string, long, long)>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                pages.Add((reader.GetString(0), reader.GetString(1), reader.GetInt64(2), reader.GetInt64(3)));
+            return pages;
+        }
+    }
+
+    /// <summary>
+    /// How much the screens under a name were used: the ones with that name as one of the
+    /// parts of their path.
+    /// </summary>
+    public (long Count, long Users) PagesNamed(DateTimeOffset from, DateTimeOffset to, string? host, string name)
+    {
+        lock (_gate)
+        {
+            long count = 0, users = 0;
+            foreach (var table in new[] { "traffic_page", "traffic_page_ip" })
+            {
+                using var command = _connection.CreateCommand();
+                var where = PageWhere(command, from, to, host) + " AND (p.page || '/') LIKE $name ESCAPE '\\'";
+                command.Parameters.AddWithValue("$name", "%/" + name.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "/%");
+                command.CommandText = table == "traffic_page"
+                    ? $"SELECT COALESCE(SUM(p.count), 0) FROM traffic_page p WHERE {where}"
+                    : $"SELECT COUNT(DISTINCT p.ip) FROM traffic_page_ip p WHERE {where}";
+                var value = Convert.ToInt64(command.ExecuteScalar());
+                if (table == "traffic_page")
+                    count = value;
+                else
+                    users = value;
+            }
+            return (count, users);
+        }
+    }
+
+    private static string PageWhere(SqliteCommand command, DateTimeOffset from, DateTimeOffset to, string? host)
+    {
+        // The screens are kept by the hour: the hour the period starts in counts whole.
+        command.Parameters.AddWithValue("$from", from.ToUnixTimeSeconds() / Hour * Hour);
+        command.Parameters.AddWithValue("$to", to.ToUnixTimeSeconds());
+        if (host is null)
+            return "p.at >= $from AND p.at < $to";
+        command.Parameters.AddWithValue("$host", host);
+        return "p.at >= $from AND p.at < $to AND p.host = $host";
     }
 
     public List<StoredError> Errors(int limit, TrafficFilter filter)

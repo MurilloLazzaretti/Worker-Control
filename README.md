@@ -235,7 +235,7 @@ access_log logs/access.zapmq.log zapmq;
 | `Ignore` | none | Beginnings of paths that are not counted |
 | `Routes` | none | Routes written by hand, such as `/api/orders/{code}/items`, for what the general rule does not tell apart |
 
-Nothing of a request is kept but its route: the query string is dropped, and numbers, identifiers and long or encoded segments become `{id}`. The numbers are in `traffic.db`, next to `ConfigWorkers.json`.
+Nothing of a request is kept but its route and the screen it came from: the query string is dropped, and numbers, identifiers and long or encoded segments become `{id}`. The screen is what the browser says in the referer, which is what tells how much each part of a web application is used. The numbers are in `traffic.db`, next to `ConfigWorkers.json`.
 
 ### Web application
 

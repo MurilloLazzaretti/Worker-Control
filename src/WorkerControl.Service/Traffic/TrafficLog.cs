@@ -7,7 +7,7 @@ namespace WorkerControl.Service.Traffic;
 /// <summary>
 /// One request, as the reverse proxy wrote it down.
 /// </summary>
-internal sealed record Hit(DateTimeOffset At, string Ip, string Host, string Method, string Path, int Status, long Bytes, double Seconds, string Upstream);
+internal sealed record Hit(DateTimeOffset At, string Ip, string Host, string Method, string Path, int Status, long Bytes, double Seconds, string Upstream, string Referer = "");
 
 /// <summary>
 /// What a request is counted as: nothing that identifies one particular request is left.
@@ -56,7 +56,7 @@ internal static partial class TrafficLog
 
             var query = address.IndexOf('?');
             return new Hit(at, Text("ip"), Text("h").ToLowerInvariant(), Text("m").ToUpperInvariant(), query >= 0 ? address[..query] : address,
-                (int)Number("s"), (long)Number("b"), Number("rt"), upstream == "-" ? "" : upstream);
+                (int)Number("s"), (long)Number("b"), Number("rt"), upstream == "-" ? "" : upstream, Text("ref"));
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException or FormatException)
         {
@@ -116,7 +116,29 @@ internal static partial class TrafficLog
                 return ("/" + string.Join('/', template), "api", app);
         }
 
-        return ("/" + string.Join('/', segments.Select(Clean)), "api", app);
+        // A file asked of an application by its name (a download): the name is one of a kind.
+        var route = segments.Select(Clean).ToArray();
+        if (route.Length > 1 && route[^1] != "{id}" && FileName().IsMatch(route[^1]))
+            route[^1] = "{arquivo}";
+        return ("/" + string.Join('/', route), "api", app);
+    }
+
+    [GeneratedRegex(@"\.[A-Za-z0-9]{1,5}$")]
+    private static partial Regex FileName();
+
+    /// <summary>
+    /// The screen a request came from, out of the address the browser says it was on: the
+    /// site and the path, with what identifies one particular visit taken out like in a
+    /// route. Null when the browser said nothing, or said something that is not a page.
+    /// </summary>
+    public static (string Host, string Page)? Page(string referer)
+    {
+        if (referer.Length == 0 || !Uri.TryCreate(referer, UriKind.Absolute, out var address) || address.Scheme is not ("http" or "https"))
+            return null;
+        var segments = address.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length > 8)
+            segments = segments[..8];
+        return (address.Host.ToLowerInvariant(), "/" + string.Join('/', segments.Select(Clean)));
     }
 
     /// <summary>
