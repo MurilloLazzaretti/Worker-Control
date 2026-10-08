@@ -518,8 +518,10 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             {
                 if (request.Value<int?>("ProcessId") is not { } processId || request.Value<string>("Queue") is not { Length: > 0 } queue)
                     return Admin.Error("invalid-request", "\"ProcessId\" and \"Queue\" are required");
-                if (!supervisor.GetStatus().Any(group => group.Workers.Any(worker => worker.ProcessId == processId)))
-                    return Admin.Error("not-found", $"There is no worker with process id {processId}");
+                // A worker of a group, or a process of a watched service (the service itself or what it started).
+                if (!supervisor.GetStatus().Any(group => group.Workers.Any(worker => worker.ProcessId == processId))
+                    && !_watcher!.GetStatus().Any(service => service.Service?.ProcessId == processId || service.Process?.ChildIds?.Contains(processId) == true))
+                    return Admin.Error("not-found", $"There is no worker or watched service with process id {processId}");
                 var lease = TimeSpan.FromSeconds(Math.Clamp(request.Value<int?>("LeaseSeconds") ?? 30, 1, 300));
                 return _trace!.Start(processId, queue, lease) is { } problem ? Admin.Error("trace-failed", problem) : Admin.Ok();
             }
