@@ -379,7 +379,12 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         var sent = broker.SendKeepAlive(
             worker.Process.Id,
             group.Config.TimeoutKeepAlive,
-            () => _inbox.Enqueue(() => KeepAliveAnswered(group, worker, now)),
+            () =>
+            {
+                // The answer is timed when it arrives, not when the next tick gets to it.
+                var answeredAt = time.GetUtcNow();
+                _inbox.Enqueue(() => KeepAliveAnswered(group, worker, now, answeredAt));
+            },
             () => _inbox.Enqueue(() => KeepAliveExpired(group, worker, now)));
 
         if (sent)
@@ -388,12 +393,11 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
             worker.NextKeepAliveAt = now + RetryDelay;
     }
 
-    private void KeepAliveAnswered(Group group, Worker worker, DateTimeOffset sentAt)
+    private void KeepAliveAnswered(Group group, Worker worker, DateTimeOffset sentAt, DateTimeOffset now)
     {
         if (worker.Gone || worker.KeepAliveSentAt != sentAt)
             return;
 
-        var now = time.GetUtcNow();
         worker.KeepAlivePending = false;
         worker.LastAnswerAt = now;
         worker.KeepAliveLatency = now - sentAt;
