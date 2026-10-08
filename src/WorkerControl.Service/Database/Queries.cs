@@ -157,11 +157,12 @@ internal static class Queries
 
     /// <summary>
     /// Tables, views, procedures and functions. Rows and size come from what the instance
-    /// counts by itself, without looking at the table.
+    /// counts by itself, without looking at the table. A table changed when one of its
+    /// triggers did.
     /// </summary>
     public const string Objects = $"""
         SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type),
-               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, o.modify_date),
+               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, ISNULL((SELECT MAX(g.modify_date) FROM sys.triggers g WHERE g.parent_id = o.object_id AND g.modify_date > o.modify_date), o.modify_date)),
                (SELECT SUM(p.row_count) FROM sys.dm_db_partition_stats p WHERE p.object_id = o.object_id AND p.index_id IN (0, 1)),
                (SELECT SUM(p.reserved_page_count) * 8 FROM sys.dm_db_partition_stats p WHERE p.object_id = o.object_id)
         FROM sys.objects o
@@ -173,7 +174,7 @@ internal static class Queries
     /// </summary>
     public const string ObjectsPlain = $"""
         SELECT o.object_id, SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type),
-               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, o.modify_date), NULL, NULL
+               DATEADD(MINUTE, {Utc}, o.create_date), DATEADD(MINUTE, {Utc}, ISNULL((SELECT MAX(g.modify_date) FROM sys.triggers g WHERE g.parent_id = o.object_id AND g.modify_date > o.modify_date), o.modify_date)), NULL, NULL
         FROM sys.objects o
         WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
         """;
@@ -294,5 +295,17 @@ internal static class Queries
           AND (EXISTS (SELECT 1 FROM sys.columns c WHERE c.object_id = o.object_id AND c.user_type_id = @id)
                OR EXISTS (SELECT 1 FROM sys.parameters p WHERE p.object_id = o.object_id AND p.user_type_id = @id)
                OR EXISTS (SELECT 1 FROM sys.sql_expression_dependencies d WHERE d.referencing_id = o.object_id AND d.referenced_class = 6 AND d.referenced_id = @id))
+        """;
+
+    /// <summary>
+    /// Who last created, altered or dropped an object, from the trace the instance keeps of
+    /// such things by itself. Only what is still in the file being written.
+    /// </summary>
+    public const string WhoChanged = """
+        SELECT TOP (1) t.LoginName, t.HostName, t.ApplicationName
+        FROM sys.traces r
+        CROSS APPLY sys.fn_trace_gettable(r.path, 1) t
+        WHERE r.is_default = 1 AND t.EventClass IN (46, 47, 164) AND t.DatabaseName = DB_NAME() AND t.ObjectID = @id
+        ORDER BY t.StartTime DESC
         """;
 }

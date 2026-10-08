@@ -234,6 +234,22 @@ internal sealed class SqlServerSource : IDatabaseSource
         return detail with { Fingerprint = detail.Script is null ? null : SqlScript.Fingerprint(detail.Script), Problems = problems };
     }
 
+    public async Task<ChangeAuthor?> WhoChangedAsync(DatabaseConnection connection, string database, int objectId, CancellationToken stopping)
+    {
+        try
+        {
+            await using var sql = await OpenAsync(connection, stopping, database);
+            var found = await ReadAsync(sql, Queries.WhoChanged, stopping, command => command.Parameters.Add(new SqlParameter("@id", System.Data.SqlDbType.Int) { Value = objectId }),
+                row => new ChangeAuthor(row.IsDBNull(0) ? null : Text(row, 0), row.IsDBNull(1) ? null : Text(row, 1), row.IsDBNull(2) ? null : Text(row, 2)));
+            return found.FirstOrDefault();
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or InvalidCastException)
+        {
+            // Not every user may read the trace, and not every instance keeps one.
+            return null;
+        }
+    }
+
     private static DateTime? Moment(DbDataReader row, int column) => row.IsDBNull(column) ? null : DateTime.SpecifyKind(row.GetDateTime(column), DateTimeKind.Utc);
 
     private static async Task<SqlConnection> OpenAsync(DatabaseConnection connection, CancellationToken stopping, string database = "master")

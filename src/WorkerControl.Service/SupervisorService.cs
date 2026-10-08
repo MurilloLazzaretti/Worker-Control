@@ -82,7 +82,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         _traffic = traffic;
 
         using var databaseHistory = DatabaseHistory.TryOpen(_directory, _logger);
-        using var database = new DatabaseMonitor(databaseSource, secrets, databaseHistory, time, loggers.CreateLogger("WorkerControl.Database"));
+        using var objectHistory = ObjectHistory.TryOpen(_directory, _logger);
+        using var database = new DatabaseMonitor(databaseSource, secrets, databaseHistory, time, loggers.CreateLogger("WorkerControl.Database"), objectHistory);
         database.Event += Record;
         database.ApplyConfig(config.Database);
         _database = database;
@@ -422,7 +423,27 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 return TrafficAnswers.Errors(_traffic!.Store, TrafficAnswers.Filter(request), request.Value<int?>("Limit") ?? 100);
 
             case "Database":
-                return DatabaseAnswers.State(_database!.Snapshot());
+                return DatabaseAnswers.State(_database!.Snapshot(), _database.Tracking());
+
+            case "DatabaseChanges" when _database?.Objects is null:
+            case "DatabaseChange" when _database?.Objects is null:
+                return Admin.Error("history-unavailable", "The changes to the objects are not being kept on this machine; see the log of the service");
+
+            case "DatabaseChanges":
+            {
+                string? Text(string name) => request.Value<string>(name) is { Length: > 0 } value ? value : null;
+                var to = request.Value<DateTimeOffset?>("To");
+                var from = request.Value<DateTimeOffset?>("From") ?? (request.Value<int?>("Days") is { } days and > 0 ? (to ?? time.GetUtcNow()).AddDays(-days) : null);
+                var (changes, total) = _database!.Objects!.Changes(new ChangeFilter(Text("Database"), Text("Kind"), Text("Schema"), Text("Name"), Text("Search"), from, to, request.Value<int?>("Limit") ?? 100));
+                return DatabaseAnswers.Changes(changes, total, _database.Tracking());
+            }
+
+            case "DatabaseChange":
+            {
+                if (request.Value<long?>("Id") is not { } id)
+                    return Admin.Error("invalid-request", "\"Id\" is required");
+                return _database!.Objects!.Change(id) is { } change ? DatabaseAnswers.Change(change) : Admin.Error("not-found", "There is no such change");
+            }
 
             case "DatabaseHistory" when _database?.History is null:
                 return Admin.Error("history-unavailable", "The history of the database is not being kept on this machine; see the log of the service");

@@ -111,6 +111,16 @@ public sealed record DatabaseConfig
     /// How little of a disk with database files may be free, in percent.
     /// </summary>
     public int DiskFreePercent { get; init; } = 10;
+
+    /// <summary>
+    /// How often the objects of the databases are looked at for what changed. Zero never looks.
+    /// </summary>
+    public int ObjectScanMinutes { get; init; } = 10;
+
+    /// <summary>
+    /// For how long a change to an object is remembered.
+    /// </summary>
+    public int ObjectHistoryDays { get; init; } = 365;
 }
 
 /// <summary>
@@ -585,7 +595,9 @@ public static class ConfigReader
             RetentionDays = Integer(database, "RetentionDays", where, defaultValue: 7, minimum: 1),
             BlockingSeconds = Integer(database, "BlockingSeconds", where, defaultValue: 30, minimum: 1),
             BackupHours = Integer(database, "BackupHours", where, defaultValue: 0, minimum: 0),
-            DiskFreePercent = Integer(database, "DiskFreePercent", where, defaultValue: 10, minimum: 0)
+            DiskFreePercent = Integer(database, "DiskFreePercent", where, defaultValue: 10, minimum: 0),
+            ObjectScanMinutes = Integer(database, "ObjectScanMinutes", where, defaultValue: 10, minimum: 0),
+            ObjectHistoryDays = Integer(database, "ObjectHistoryDays", where, defaultValue: 365, minimum: 1)
         };
     }
 

@@ -12,8 +12,9 @@ internal static class DatabaseAnswers
 
     private static JToken Token(object? value) => value is null ? JValue.CreateNull() : JToken.FromObject(value, Format);
 
-    public static JObject State(DatabaseState state) => Admin.Ok(answer =>
+    public static JObject State(DatabaseState state, IReadOnlyList<ObjectTracking> tracking) => Admin.Ok(answer =>
     {
+        answer["Tracking"] = Token(tracking);
         answer["Configured"] = state.Configured;
         answer["Name"] = state.Name;
         answer["Server"] = state.Server;
@@ -86,4 +87,13 @@ internal static class DatabaseAnswers
         foreach (var property in (JObject)Token(detail))
             answer[property.Key] = property.Value;
     });
+
+    public static JObject Changes(IReadOnlyList<ObjectChange> changes, int total, IReadOnlyList<ObjectTracking> tracking) => Admin.Ok(answer =>
+    {
+        answer["Total"] = total;
+        answer["Changes"] = Token(changes);
+        answer["Tracking"] = Token(tracking);
+    });
+
+    public static JObject Change(ObjectChange change) => Admin.Ok(answer => answer["Change"] = Token(change));
 }

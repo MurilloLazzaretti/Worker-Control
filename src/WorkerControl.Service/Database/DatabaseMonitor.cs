@@ -39,7 +39,7 @@ public sealed record DatabaseState
 /// what asks for attention on it. It looks from a thread of its own, so an instance that takes
 /// long to answer never delays the supervision of the workers.
 /// </summary>
-internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector protector, DatabaseHistory? history, TimeProvider time, ILogger logger) : IDisposable
+internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector protector, DatabaseHistory? history, TimeProvider time, ILogger logger, ObjectHistory? objects = null) : IDisposable
 {
     public const string GroupPrefix = "database:";
 
@@ -70,6 +70,8 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             var same = config is not null && _config is not null && config.Server == _config.Server && config.User == _config.User && config.Password == _config.Password;
             _config = config;
             _next = _nextSlow = DateTimeOffset.MinValue;
+            foreach (var gone in _tracking.Keys.Where(name => config is null || !config.Databases.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList())
+                _tracking.Remove(gone);
             _catalogs.Clear();
             if (!same)
             {
@@ -94,12 +96,41 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
     {
         DatabaseConfig? config;
         var now = time.GetUtcNow();
+        bool scan;
         lock (_gate)
         {
             config = _config;
-            if (config is null || now < _next)
+            if (config is null)
                 return;
+            scan = objects is not null && config.ObjectScanMinutes > 0 && config.Databases.Count > 0 && now >= _nextScan && _state.Online == true;
         }
+        if (scan && Interlocked.CompareExchange(ref _scanning, 1, 0) == 0)
+        {
+            lock (_gate)
+                _nextScan = now + TimeSpan.FromMinutes(config.ObjectScanMinutes);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await ScanObjectsAsync(config);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception error)
+                {
+                    logger.LogError(error, "Looking at the objects of the database failed");
+                }
+                finally
+                {
+                    Volatile.Write(ref _scanning, 0);
+                }
+            });
+        }
+
+        lock (_gate)
+            if (now < _next)
+                return;
         if (Interlocked.CompareExchange(ref _sampling, 1, 0) != 0)
             return;
         lock (_gate)
@@ -255,6 +286,72 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             _expensive = (queries, now);
         return queries;
     }
+
+    // ---------------------------------------------------------------- changes to the objects
+
+    private readonly Dictionary<string, ObjectTracking> _tracking = new(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset _nextScan = DateTimeOffset.MinValue;
+    private DateTimeOffset _nextObjectPrune = DateTimeOffset.MinValue;
+    private int _scanning;
+
+    public ObjectHistory? Objects => objects;
+
+    /// <summary>
+    /// How far the watching of each database has got; nothing when it is not being done.
+    /// </summary>
+    public IReadOnlyList<ObjectTracking> Tracking()
+    {
+        lock (_gate)
+            return [.. _tracking.Values.OrderBy(item => item.Database, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// One look at the objects of every database named, as <see cref="Tick"/> would start it.
+    /// </summary>
+    internal async Task ScanObjectsAsync(DatabaseConfig config)
+    {
+        if (objects is null || Connection(config) is not { } connection)
+            return;
+        var watcher = new ObjectWatcher(source, objects, time) { Pause = ScanPause };
+        void Tell(ObjectTracking tracking)
+        {
+            lock (_gate)
+                if (ReferenceEquals(config, _config))
+                    _tracking[tracking.Database] = tracking with { ScannedAt = tracking.ScannedAt ?? (_tracking.TryGetValue(tracking.Database, out var before) ? before.ScannedAt : null) };
+        }
+
+        foreach (var database in config.Databases)
+        {
+            try
+            {
+                var (tracking, changes) = await watcher.ScanAsync(connection, database, _stopping.Token, Tell);
+                Tell(tracking);
+                foreach (var change in changes)
+                    Event?.Invoke(Raise(config, change.At, EventKind.DatabaseObjectChanged,
+                        $"{change.Action.ToLowerInvariant()} {change.Kind.ToLowerInvariant()} {change.Schema}.{change.Name} in {change.Database}"
+                        + (change.OldName is null ? "" : $", which was {change.OldName}") + (change.Login is null ? "" : $", by {change.Login}")));
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // One database that cannot be read does not keep the others from being looked at.
+                logger.LogWarning("The objects of {Database} could not be looked at: {Error}", database, error.Message);
+                lock (_gate)
+                    _tracking[database] = (_tracking.TryGetValue(database, out var before) ? before : new ObjectTracking(database, 0, 0, null, null, null)) with { Problem = error.Message };
+            }
+        }
+
+        var now = time.GetUtcNow();
+        if (now >= _nextObjectPrune)
+        {
+            _nextObjectPrune = now + TimeSpan.FromHours(6);
+            objects.Prune(now - TimeSpan.FromDays(config.ObjectHistoryDays));
+        }
+    }
+
+    /// <summary>
+    /// Between one object and the next of a look; none in a test.
+    /// </summary>
+    internal TimeSpan ScanPause { get; init; } = TimeSpan.FromMilliseconds(20);
 
     // ---------------------------------------------------------------- objects
 

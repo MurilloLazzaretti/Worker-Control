@@ -57,8 +57,21 @@ internal sealed class PretendInstance : IDatabaseSource
         return Task.FromResult<IReadOnlyList<CatalogObject>>([.. Catalog]);
     }
 
-    public Task<CatalogDetail> ObjectAsync(DatabaseConnection connection, string database, CatalogObject target, CancellationToken stopping) =>
-        Task.FromResult(new CatalogDetail { Object = target, Script = "CREATE " + target.Name, ScriptSource = "instance", Fingerprint = SqlScript.Fingerprint("CREATE " + target.Name) });
+    /// <summary>
+    /// What creates each object, by name; "CREATE name" for the ones not said.
+    /// </summary>
+    public Dictionary<string, string> Scripts { get; } = [];
+    public List<string> DetailsRead { get; } = [];
+    public ChangeAuthor? Author { get; set; }
+
+    public Task<CatalogDetail> ObjectAsync(DatabaseConnection connection, string database, CatalogObject target, CancellationToken stopping)
+    {
+        DetailsRead.Add(target.Name);
+        var script = Scripts.GetValueOrDefault(target.Name, "CREATE " + target.Name);
+        return Task.FromResult(new CatalogDetail { Object = target, Script = script, ScriptSource = "instance", Fingerprint = SqlScript.Fingerprint(script) });
+    }
+
+    public Task<ChangeAuthor?> WhoChangedAsync(DatabaseConnection connection, string database, int objectId, CancellationToken stopping) => Task.FromResult(Author);
 
     public Task<IReadOnlyList<ExpensiveQuery>> ExpensiveAsync(DatabaseConnection connection, IReadOnlyList<string> databases, CancellationToken stopping)
     {
@@ -600,6 +613,165 @@ public sealed class DatabasePartsTests : IDisposable
 }
 
 /// <summary>
+/// What changed in the objects of a database between one look and the next.
+/// </summary>
+public sealed class ObjectWatcherTests : IDisposable
+{
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 3, 1, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    private readonly string _directory = Directory.CreateTempSubdirectory("objects-test-").FullName;
+    private readonly PretendInstance _instance = new();
+    private readonly Clock _clock = new();
+    private readonly ObjectHistory _history;
+    private readonly ObjectWatcher _watcher;
+    private readonly DatabaseConnection _connection = new("HOST", "app", "x", false, true);
+
+    public ObjectWatcherTests()
+    {
+        _history = ObjectHistory.TryOpen(_directory, NullLogger.Instance)!;
+        _watcher = new ObjectWatcher(_instance, _history, _clock) { Pause = TimeSpan.Zero };
+    }
+
+    public void Dispose()
+    {
+        _history.Dispose();
+        Directory.Delete(_directory, recursive: true);
+    }
+
+    private async Task<List<ObjectChange>> Look()
+    {
+        _instance.DetailsRead.Clear();
+        _clock.Now += TimeSpan.FromMinutes(10);
+        return (await _watcher.ScanAsync(_connection, "Sales", CancellationToken.None)).Changes;
+    }
+
+    /// <summary>
+    /// The instance says the object was touched now.
+    /// </summary>
+    private void Touch(string name, string? script = null)
+    {
+        var at = _instance.Catalog.FindIndex(item => item.Name == name);
+        _instance.Catalog[at] = _instance.Catalog[at] with { ModifiedAt = _clock.Now.UtcDateTime };
+        if (script is not null)
+            _instance.Scripts[name] = script;
+    }
+
+    [Fact]
+    public async Task The_first_look_only_records_how_the_database_is()
+    {
+        Assert.Null(_history.BaselineAt("Sales"));
+
+        Assert.Empty(await Look());
+
+        Assert.Equal(6, _instance.DetailsRead.Count);
+        Assert.Equal(6, _history.Known("sales").Count);
+        Assert.NotNull(_history.BaselineAt("Sales"));
+        Assert.Equal("CREATE Orders", _history.Script("Sales", "Table", "dbo", "orders"));
+    }
+
+    [Fact]
+    public async Task Nothing_is_read_again_while_the_instance_says_nothing_was_touched()
+    {
+        await Look();
+
+        Assert.Empty(await Look());
+
+        Assert.Empty(_instance.DetailsRead);
+    }
+
+    [Fact]
+    public async Task An_object_whose_script_changed_was_altered_and_both_versions_are_kept()
+    {
+        await Look();
+        _instance.Author = new ChangeAuthor("DOMAIN\\ana", "DEV-PC", "SSMS");
+        Touch("spCloseOrders", "CREATE spCloseOrders -- v2");
+
+        var change = Assert.Single(await Look());
+
+        Assert.Equal(["spCloseOrders"], _instance.DetailsRead);
+        Assert.Equal(("Altered", "Procedure", "dbo", "spCloseOrders", "DOMAIN\\ana"), (change.Action, change.Kind, change.Schema, change.Name, change.Login));
+        Assert.NotEqual(change.OldFingerprint, change.NewFingerprint);
+        // The scripts are not carried around with the list of changes.
+        Assert.Null(change.NewScript);
+        var kept = _history.Change(change.Id)!;
+        Assert.Equal(("CREATE spCloseOrders", "CREATE spCloseOrders -- v2", "DEV-PC"), (kept.OldScript, kept.NewScript, kept.Host));
+        Assert.Empty(await Look());
+    }
+
+    [Fact]
+    public async Task An_object_that_was_touched_and_is_the_same_did_not_change()
+    {
+        await Look();
+        // A rebuilt index, a recompiled procedure: the instance says touched, the script says the same.
+        Touch("Orders");
+
+        Assert.Empty(await Look());
+        Assert.Equal(["Orders"], _instance.DetailsRead);
+        Assert.Empty(await Look());
+        Assert.Empty(_instance.DetailsRead);
+    }
+
+    [Fact]
+    public async Task What_is_made_dropped_or_renamed_is_told_as_such()
+    {
+        await Look();
+        _instance.Catalog.Add(new CatalogObject(50, "View", "dbo", "vwNew", "V", null, _clock.Now.UtcDateTime, null, null));
+        _instance.Catalog.RemoveAll(item => item.Name == "Customers");
+        // The same object, under another name.
+        var at = _instance.Catalog.FindIndex(item => item.Name == "spCloseOrders");
+        _instance.Catalog[at] = _instance.Catalog[at] with { Name = "spCloseOrdersOld", ModifiedAt = _clock.Now.UtcDateTime };
+
+        var changes = await Look();
+
+        Assert.Equal(["Created View vwNew", "Dropped Table Customers", "Renamed Procedure spCloseOrdersOld"],
+            changes.Select(change => $"{change.Action} {change.Kind} {change.Name}").Order());
+        Assert.Equal("dbo.spCloseOrders", changes.Single(change => change.Action == "Renamed").OldName);
+        Assert.Equal("CREATE Customers", _history.Change(changes.Single(change => change.Action == "Dropped").Id)!.OldScript);
+        Assert.DoesNotContain(_history.Known("Sales"), item => item.Name is "Customers" or "spCloseOrders");
+        Assert.Empty(await Look());
+    }
+
+    [Fact]
+    public async Task A_first_look_that_was_cut_short_goes_on_without_calling_anything_a_change()
+    {
+        // Half of the database was recorded before the service stopped.
+        foreach (var item in _instance.Catalog.Take(3))
+            _history.Store("Sales", item, SqlScript.Fingerprint("CREATE " + item.Name), "CREATE " + item.Name);
+
+        Assert.Empty(await Look());
+
+        Assert.Equal(3, _instance.DetailsRead.Count);
+        Assert.Equal(6, _history.Known("Sales").Count);
+    }
+
+    [Fact]
+    public async Task The_changes_are_found_by_object_by_text_and_by_time()
+    {
+        await Look();
+        Touch("spCloseOrders", "v2");
+        await Look();
+        Touch("spCloseOrders", "v3");
+        Touch("vwOrders", "v2");
+        await Look();
+
+        Assert.Equal(3, _history.Changes(new ChangeFilter("sales", null, null, null, null, null, null, 100)).Total);
+        var (latest, total) = _history.Changes(new ChangeFilter(null, "Procedure", "dbo", "spcloseorders", null, null, null, 1));
+        Assert.Equal((2, 1), (total, latest.Count));
+        Assert.Single(_history.Changes(new ChangeFilter(null, null, null, null, "vwor", null, null, 100)).Changes);
+        Assert.Equal(2, _history.Changes(new ChangeFilter(null, null, null, null, null, _clock.Now.AddMinutes(-1), null, 100)).Total);
+        Assert.Empty(_history.Changes(new ChangeFilter("Other", null, null, null, null, null, null, 100)).Changes);
+
+        _history.Prune(_clock.Now.AddMinutes(-1));
+        Assert.Equal(2, _history.Changes(new ChangeFilter(null, null, null, null, null, null, null, 100)).Total);
+    }
+}
+
+/// <summary>
 /// The database through the administration contract, with the service running.
 /// </summary>
 [Collection("processes")]
@@ -647,6 +819,13 @@ public class DatabaseAdminTests
         Assert.Equal("CREATE vwOrders", view!.Value<string>("Script"));
         Assert.Equal("vwOrders", view["Object"]!.Value<string>("Name"));
         Assert.Equal(64, view.Value<string>("Fingerprint")!.Length);
+        // The objects are looked at by themselves, and what changes is told.
+        JObject? tracked = null;
+        Assert.True(await Rig.Eventually(async () => (tracked = await rig.CommandAsync("Database"))?["Tracking"] is JArray { Count: 1 } tracking && tracking[0]["BaselineAt"]?.Type == JTokenType.Date));
+        Assert.Equal(6, tracked!["Tracking"]![0]!.Value<int>("Known"));
+        Assert.Equal(0, (await rig.CommandAsync("DatabaseChanges"))!.Value<int>("Total"));
+        Assert.Equal("not-found", (await rig.CommandAsync("DatabaseChange", request => request["Id"] = 99))!["Error"]!.Value<string>("Code"));
+
         var other = await rig.CommandAsync("DatabaseObjects", request => request["Database"] = "Payroll");
         Assert.Equal("not-found", other!["Error"]!.Value<string>("Code"));
     }

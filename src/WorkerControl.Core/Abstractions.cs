@@ -147,7 +147,8 @@ public enum EventKind
     DatabaseDown,
     DatabaseUp,
     DatabaseAlert,
-    DatabaseAlertCleared
+    DatabaseAlertCleared,
+    DatabaseObjectChanged
 }
 
 public sealed record SupervisorEvent(DateTimeOffset At, EventKind Kind, string? Group, int? ProcessId, string Detail);

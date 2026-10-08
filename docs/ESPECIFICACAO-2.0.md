@@ -239,6 +239,7 @@ Têm o campo `Command` em vez de `Message`, e `Version` com a versão do contrat
 | `StartTrace` / `StopTrace` | Repassa a uma fila o trace de um worker que só conhece o trace da 1.x (seção 11.3) |
 | `Frontends`, `Traffic`, `TrafficRoutes`, `TrafficPages`, `TrafficUpstreams`, `TrafficErrors` | Os módulos da aplicação web publicada na máquina e o tráfego lido do log do proxy reverso, também especificados em Monitoramento do ambiente |
 | `DatabaseObjects`, `DatabaseObject` | Os objetos dos bancos acompanhados e o detalhe de cada um, com o script que o cria |
+| `DatabaseChanges`, `DatabaseChange` | O que mudou nos objetos dos bancos acompanhados, e uma alteração com o script de antes e o de depois |
 | `Database`, `DatabaseHistory`, `DatabaseQueries` | A saúde da instância de banco de dados do ambiente, seu histórico e as consultas mais caras. Especificados em `docs/BANCO.md` do ZapMQ |
 | `ListServices`, `StartService`, `StopService`, `RestartService` | Serviços do Windows acompanhados sem serem iniciados pelo Worker Control. Especificados em [Monitoramento do ambiente](https://github.com/MurilloLazzaretti/ZapMQ/blob/main/docs/AMBIENTE.md); a versão do contrato passa a 2 e `Status` ganha `Services` |
 

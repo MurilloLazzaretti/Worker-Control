@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WorkerControl</AssemblyName>
     <RootNamespace>WorkerControl.Service</RootNamespace>
-    <Version>2.8.1</Version>
+    <Version>2.9.0</Version>
   </PropertyGroup>
 
   <!-- dotnet publish -r win-x64 gives one executable that carries the runtime. -->

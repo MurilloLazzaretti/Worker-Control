@@ -296,6 +296,12 @@ databases, disks, backups, jobs and the statements that cost the most. Only SQL 
   who uses it and the script that creates it. The script of a view, procedure or function is the
   text the instance keeps; the one of a table or type is written from the catalog. Each comes
   with a fingerprint of its script. A database that is not named is refused.
+- Every `ObjectScanMinutes` (10 by default; zero never does) the objects are looked at for what
+  changed: created, altered, renamed and dropped, each kept with the script before and after for
+  `ObjectHistoryDays` (365), in `objects.db`. Only what the instance says was touched is read
+  again, and an object is the same while its script is. The first look at a database only
+  records how it is. Who made the change is taken from the default trace of the instance, when
+  it can be read.
 - `BackupHours` zero does not look at backups. The history of the charts is kept in `database.db`.
 
 ## ⚙️ Installation

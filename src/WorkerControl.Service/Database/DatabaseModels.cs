@@ -105,4 +105,12 @@ public interface IDatabaseSource
     /// All there is to say about one object, and what creates it.
     /// </summary>
     Task<CatalogDetail> ObjectAsync(DatabaseConnection connection, string database, CatalogObject target, CancellationToken stopping);
+
+    /// <summary>
+    /// Who last changed an object, when the instance still remembers. Null when it does not,
+    /// or may not be asked.
+    /// </summary>
+    Task<ChangeAuthor?> WhoChangedAsync(DatabaseConnection connection, string database, int objectId, CancellationToken stopping);
 }
+
+public sealed record ChangeAuthor(string? Login, string? Host, string? Application);
