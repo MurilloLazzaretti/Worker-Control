@@ -84,7 +84,10 @@ public sealed class Rig : IAsyncDisposable
         _broker = ServerHost.Build([], builder => builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ZapMQ:Port"] = Port.ToString(),
-            ["ZapMQ:LogDirectory"] = Path.Combine(Directory, "zapmq-logs")
+            ["ZapMQ:LogDirectory"] = Path.Combine(Directory, "zapmq-logs"),
+            // Only the messaging port matters here, and many servers run side by side.
+            ["ZapMQ:Panel:Enabled"] = "false",
+            ["ZapMQ:QueueDefinitionsFile"] = Path.Combine(Directory, "queues.json")
         }));
         await _broker.StartAsync();
     }
