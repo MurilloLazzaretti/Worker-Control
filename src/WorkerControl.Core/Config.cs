@@ -46,6 +46,56 @@ public sealed record WorkerControlConfig
     /// Web applications made of modules published on this machine.
     /// </summary>
     public IReadOnlyList<FrontendConfig> Frontends { get; init; } = [];
+
+    /// <summary>
+    /// The access log of the reverse proxy, read to measure the traffic. Null reads none.
+    /// </summary>
+    public TrafficConfig? Traffic { get; init; }
+}
+
+/// <summary>
+/// Where the reverse proxy writes one JSON line per request, and how much of it is kept.
+/// </summary>
+public sealed record TrafficConfig
+{
+    public required string AccessLog { get; init; }
+
+    /// <summary>
+    /// What makes the proxy open its log again after the file was renamed. Without it the
+    /// file is never rotated.
+    /// </summary>
+    public string? ReopenCommand { get; init; }
+
+    public int RotateAtMb { get; init; } = 100;
+
+    public int KeepFiles { get; init; } = 5;
+
+    public int RetentionDays { get; init; } = 30;
+
+    /// <summary>
+    /// Distinct routes counted per day. What comes beyond that is added up as one.
+    /// </summary>
+    public int MaxRoutes { get; init; } = 2000;
+
+    public int KeepErrors { get; init; } = 500;
+
+    /// <summary>
+    /// First segments of a path after which the next one still names the application:
+    /// with "api", <c>/api/orders/1</c> belongs to <c>api/orders</c>.
+    /// </summary>
+    public IReadOnlyList<string> GroupBy { get; init; } = ["api", "mfe"];
+
+    /// <summary>
+    /// Routes written by hand, for what the general rule does not tell apart:
+    /// <c>/api/orders/{code}/items</c>.
+    /// </summary>
+    public IReadOnlyList<string> Routes { get; init; } = [];
+
+    /// <summary>
+    /// Beginnings of paths that are not counted at all: a monitoring panel that asks for its
+    /// own numbers every few seconds, for one.
+    /// </summary>
+    public IReadOnlyList<string> Ignore { get; init; } = [];
 }
 
 /// <summary>
@@ -306,7 +356,8 @@ public static class ConfigReader
                 HealthRetention = TimeSpan.FromHours(Integer(root, "HealthRetentionHours", "", defaultValue: 24, minimum: 1)),
                 Groups = ReadGroups(root, general),
                 Services = ReadServices(root),
-                Frontends = ReadFrontends(root)
+                Frontends = ReadFrontends(root),
+                Traffic = ReadTraffic(root)
             };
             return config;
         }
@@ -402,6 +453,42 @@ public static class ConfigReader
             }
         }
         return new ServicesConfig { SuggestFrom = folders, Items = items };
+    }
+
+    private static TrafficConfig? ReadTraffic(JsonElement root)
+    {
+        if (!root.TryGetProperty("Traffic", out var traffic) || traffic.ValueKind == JsonValueKind.Null)
+            return null;
+        if (traffic.ValueKind != JsonValueKind.Object)
+            throw new ConfigException("\"Traffic\" must be an object");
+
+        const string where = "\"Traffic\"";
+        var log = Text(traffic, "AccessLog", where)?.Trim();
+        if (string.IsNullOrEmpty(log))
+            throw new ConfigException($"\"AccessLog\" is required in {where}");
+
+        List<string> Texts(string name)
+        {
+            if (!traffic.TryGetProperty(name, out var array) || array.ValueKind == JsonValueKind.Null)
+                return [];
+            if (array.ValueKind != JsonValueKind.Array || array.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+                throw new ConfigException($"\"{name}\" must be a list of texts in {where}");
+            return [.. array.EnumerateArray().Select(item => item.GetString()!.Trim()).Where(item => item.Length > 0)];
+        }
+
+        return new TrafficConfig
+        {
+            AccessLog = log,
+            ReopenCommand = Text(traffic, "ReopenCommand", where) is { Length: > 0 } command ? command.Trim() : null,
+            RotateAtMb = Integer(traffic, "RotateAtMb", where, defaultValue: 100, minimum: 1),
+            KeepFiles = Integer(traffic, "KeepFiles", where, defaultValue: 5, minimum: 0),
+            RetentionDays = Integer(traffic, "RetentionDays", where, defaultValue: 30, minimum: 1),
+            MaxRoutes = Integer(traffic, "MaxRoutes", where, defaultValue: 2000, minimum: 10),
+            KeepErrors = Integer(traffic, "KeepErrors", where, defaultValue: 500, minimum: 0),
+            GroupBy = traffic.TryGetProperty("GroupBy", out _) ? Texts("GroupBy") : ["api", "mfe"],
+            Routes = Texts("Routes"),
+            Ignore = Texts("Ignore")
+        };
     }
 
     private static List<FrontendConfig> ReadFrontends(JsonElement root)

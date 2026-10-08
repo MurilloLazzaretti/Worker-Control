@@ -199,6 +199,44 @@ Services of the machine that are not started by Worker Control can be watched by
 | `Check` | none | `Tcp` (a host and port that has to take a connection) or `Url` (an address that has to answer 2xx), tried every 15 seconds while the service runs |
 | `LogFiles` | none | Folder and file name pattern of the log of the service |
 
+### Traffic
+
+The traffic through a reverse proxy can be measured from its access log, without touching any application: how many requests, how fast and with how many errors, by application, endpoint and instance.
+
+The proxy has to write one JSON line per request. For NGINX:
+
+```nginx
+log_format zapmq escape=json
+    '{"t":"$time_iso8601","ms":$msec,"ip":"$remote_addr","h":"$host",'
+    '"m":"$request_method","u":"$request_uri","s":$status,"b":$body_bytes_sent,'
+    '"rt":$request_time,"ua":"$upstream_addr","us":"$upstream_status",'
+    '"ut":"$upstream_response_time","ref":"$http_referer"}';
+access_log logs/access.zapmq.log zapmq;
+```
+
+```json
+"Traffic": {
+  "AccessLog": "C:\\nginx\\logs\\access.zapmq.log",
+  "ReopenCommand": "C:\\nginx\\nginx.exe -s reopen",
+  "Ignore": ["/panel/"]
+}
+```
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `AccessLog` | | The file the proxy writes, in the format above |
+| `ReopenCommand` | none | What makes the proxy open its log again. With it, the file is renamed when it passes `RotateAtMb` and the proxy starts another; without it, the file is never touched |
+| `RotateAtMb` | 100 | Size at which the file is put aside |
+| `KeepFiles` | 5 | Files put aside that are kept |
+| `RetentionDays` | 30 | How long the numbers are kept. They are by the minute for two days and by the hour after that |
+| `MaxRoutes` | 2000 | Distinct routes counted per day; beyond that they are added up as one |
+| `KeepErrors` | 500 | Last answers with a server error (5xx) kept to be looked at |
+| `GroupBy` | `api`, `mfe` | First segments of a path after which the next one still names the application |
+| `Ignore` | none | Beginnings of paths that are not counted |
+| `Routes` | none | Routes written by hand, such as `/api/orders/{code}/items`, for what the general rule does not tell apart |
+
+Nothing of a request is kept but its route: the query string is dropped, and numbers, identifiers and long or encoded segments become `{id}`. The numbers are in `traffic.db`, next to `ConfigWorkers.json`.
+
 ### Web application
 
 A web application made of modules published as folders (micro frontends) can be watched too: which modules there are, the version each one says it is in, whether each one answers, and when each one was published.

@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using WorkerControl.Core;
+using WorkerControl.Service.Traffic;
 
 namespace WorkerControl.Service;
 
@@ -39,6 +40,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private TraceRelay? _trace;
     private ServiceWatcher? _watcher;
     private FrontendWatcher? _frontends;
+    private TrafficCollector? _traffic;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -72,6 +74,11 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         frontends.ApplyConfig(config.Frontends);
         _frontends = frontends;
 
+        using var trafficStore = TryOpenTraffic();
+        using var traffic = trafficStore is null ? null : new TrafficCollector(_directory, trafficStore, time, loggers.CreateLogger("WorkerControl.Traffic"));
+        traffic?.ApplyConfig(config.Traffic);
+        _traffic = traffic;
+
         Record(EventKind.ServiceStarted, $"version {ServiceHost.Version}");
         supervisor.ApplyConfig(config);
         monitored.ApplyConfig(config.Services);
@@ -97,6 +104,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             supervisor.Tick();
             monitored.Tick();
             frontends.Tick();
+            traffic?.Tick();
             Save(supervisor, state, ref savedVersion);
 
             if (now >= nextHealth)
@@ -224,6 +232,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         supervisor.ApplyConfig(config);
         _watcher?.ApplyConfig(config.Services);
         _frontends?.ApplyConfig(config.Frontends);
+        _traffic?.ApplyConfig(config.Traffic);
     }
 
     private FileSystemWatcher? WatchConfig()
@@ -343,6 +352,26 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             case "Status":
                 return Admin.Status(supervisor.GetStatus(), _startedAt, _config!.ZapMQHost, _config.ZapMQPort,
                     _broker?.HealthySince(time.GetUtcNow() - TimeSpan.FromSeconds(10)) ?? false, _lastHealth, _watcher!.GetStatus());
+
+            case "Traffic" when _traffic is null:
+            case "TrafficRoutes" when _traffic is null:
+            case "TrafficErrors" when _traffic is null:
+                return Admin.Error("history-unavailable", "The traffic is not being kept on this machine; see the log of the service");
+
+            case "Traffic":
+            {
+                var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
+                return TrafficAnswers.Summary(_traffic!.Store, _traffic.Source, _traffic.Configured, from, to, TrafficAnswers.Filter(request));
+            }
+
+            case "TrafficRoutes":
+            {
+                var (from, to) = TrafficAnswers.Period(request, time.GetUtcNow());
+                return TrafficAnswers.Routes(_traffic!.Store, from, to, TrafficAnswers.Filter(request), request.Value<string>("Search"), request.Value<string>("Sort"), request.Value<int?>("Limit") ?? 100);
+            }
+
+            case "TrafficErrors":
+                return TrafficAnswers.Errors(_traffic!.Store, TrafficAnswers.Filter(request), request.Value<int?>("Limit") ?? 100);
 
             case "Frontends":
             {
@@ -500,6 +529,19 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
             default:
                 return Admin.Error("unknown-command", $"Unknown command \"{command}\"");
+        }
+    }
+
+    private TrafficStore? TryOpenTraffic()
+    {
+        try
+        {
+            return new TrafficStore(_directory);
+        }
+        catch (Exception error)
+        {
+            _logger.LogError("The traffic is not being kept, because its file could not be opened: {Error}", error.Message);
+            return null;
         }
     }
 
