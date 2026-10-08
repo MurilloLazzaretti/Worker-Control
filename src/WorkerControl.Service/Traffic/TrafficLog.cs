@@ -136,6 +136,9 @@ internal static partial class TrafficLog
         if (referer.Length == 0 || !Uri.TryCreate(referer, UriKind.Absolute, out var address) || address.Scheme is not ("http" or "https"))
             return null;
         var segments = address.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // What a style sheet or a script asks for names the file as where it came from; a file is no screen.
+        if (segments.Length > 0 && segments[^1].LastIndexOf('.') is var dot and > 0 && StaticExtensions.Contains(segments[^1][(dot + 1)..]))
+            return null;
         if (segments.Length > 8)
             segments = segments[..8];
         return (address.Host.ToLowerInvariant(), "/" + string.Join('/', segments.Select(Clean)));

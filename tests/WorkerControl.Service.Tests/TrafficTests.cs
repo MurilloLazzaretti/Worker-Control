@@ -377,6 +377,8 @@ public sealed class TrafficTests : IDisposable
     [InlineData("")]
     [InlineData("-")]
     [InlineData("android-app://com.example")]
+    [InlineData("http://app.test/mfe/plataforma/styles.a03002c957762f16.css")]
+    [InlineData("http://app.test/main.41cf973239e8398a.js")]
     public void A_referer_that_is_not_a_page_is_nothing(string referer) =>
         Assert.Null(TrafficLog.Page(referer));
 
