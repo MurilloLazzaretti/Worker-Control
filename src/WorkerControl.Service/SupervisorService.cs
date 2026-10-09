@@ -492,6 +492,38 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             case "TransportCapture":
                 return _transport!.Capture(request.Value<string>("Kind"), request.Value<string>("Name"), request.Value<bool?>("Incoming") == true);
 
+            case "TransportSettings":
+                return _transport!.Settings();
+
+            case "SetTransportInboxes":
+            {
+                var answer = _transport!.SetInboxes(request["Inboxes"] as JObject, _file);
+                if (answer.Value<bool>("Ok"))
+                {
+                    Record(EventKind.ManualAction, "inboxes of the transport changed" + by);
+                    Interlocked.Exchange(ref _reloadRequested, 1);
+                }
+                return answer;
+            }
+
+            case "TransportFiles":
+                return _transport!.TargetFiles(request.Value<string>("Kind"), request.Value<string>("Name"));
+
+            case "TransportFile":
+                return _transport!.ReadFile(request.Value<string>("Kind"), request.Value<string>("Name"), request.Value<int?>("Instance") ?? 0, request.Value<string>("Path"));
+
+            case "SetTransportFile":
+            {
+                var kind = request.Value<string>("Kind");
+                var name = request.Value<string>("Name");
+                var path = request.Value<string>("Path");
+                var answer = _transport!.WriteFile(kind, name, request.Value<int?>("Instance") ?? 0, path, request.Value<string>("Content"), request.Value<string>("Sha256"),
+                    request.Value<bool?>("Restart") == true, lifetime.ApplicationStopping);
+                if (answer.Value<bool>("Ok"))
+                    Record(EventKind.ManualAction, $"file {path} of {kind} {name} changed{(answer.Value<bool>("Restarted") ? ", and it was started again" : "")}" + by);
+                return answer;
+            }
+
             case "TransportDeploy":
             {
                 if (request.Value<string>("Package") is not { Length: > 0 } package || request.Value<int?>("Item") is not { } item)

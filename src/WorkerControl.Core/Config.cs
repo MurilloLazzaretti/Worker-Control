@@ -83,6 +83,12 @@ public sealed record TransportConfig
     public string Inbox { get; init; } = "inbox";
 
     /// <summary>
+    /// The inbox of one kind or another, when it is not the folder of that kind under
+    /// <see cref="Inbox"/>: by kind (worker, service, api, frontend), a full path.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Inboxes { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// How many replaced versions of each target are kept, to go back to.
     /// </summary>
     public int KeepVersions { get; init; } = 3;
@@ -667,10 +673,31 @@ public static class ConfigReader
         {
             Directory = Text(transport, "Directory", where) is { Length: > 0 } directory ? directory.Trim() : "transport",
             Inbox = Text(transport, "Inbox", where) is { Length: > 0 } inbox ? inbox.Trim() : "inbox",
+            Inboxes = ReadInboxes(transport, where),
             KeepVersions = Integer(transport, "KeepVersions", where, defaultValue: 3, minimum: 0),
             Keep = Texts(transport, "Keep", where) ?? TransportConfig.DefaultKeep,
             Targets = targets
         };
+    }
+
+    private static Dictionary<string, string> ReadInboxes(JsonElement transport, string where)
+    {
+        var inboxes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!transport.TryGetProperty("Inboxes", out var said) || said.ValueKind == JsonValueKind.Null)
+            return inboxes;
+        if (said.ValueKind != JsonValueKind.Object)
+            throw new ConfigException($"\"Inboxes\" must be an object in {where}");
+        foreach (var item in said.EnumerateObject())
+        {
+            var kind = item.Name.Trim().ToLowerInvariant();
+            if (kind is not ("worker" or "service" or "api" or "frontend"))
+                throw new ConfigException($"\"Inboxes\" takes worker, service, api and frontend in {where}");
+            if (item.Value.ValueKind != JsonValueKind.String)
+                throw new ConfigException($"The inbox of {kind} must be the path of a folder in {where}");
+            if (item.Value.GetString()!.Trim() is { Length: > 0 } path)
+                inboxes[kind] = path;
+        }
+        return inboxes;
     }
 
     private static DatabaseConfig? ReadDatabase(JsonElement root)

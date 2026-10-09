@@ -478,6 +478,41 @@ public class TransportAdminTests
         Assert.Equal("v2", File.ReadAllText(Path.Combine(orders, "App.exe")));
         Assert.Equal("not-found", (await rig.CommandAsync("TransportCapture", request => { request["Kind"] = "service"; request["Name"] = "Orders"; request["Incoming"] = true; }))!["Error"]!.Value<string>("Code"));
 
+        // The files of the environment can be read and written from the panel; the others cannot.
+        var files = await rig.CommandAsync("TransportFiles", request => { request["Kind"] = "service"; request["Name"] = "Sockets"; });
+        Assert.Equal(["appsettings.json"], files!["Files"]!.Select(file => (string?)file["Path"]));
+        var opened = await rig.CommandAsync("TransportFile", request => { request["Kind"] = "service"; request["Name"] = "Sockets"; request["Path"] = "appsettings.json"; });
+        Assert.Equal("{of sockets}", opened!.Value<string>("Content"));
+        JObject Write(string path, string content, string? sha = null, bool restart = false) => rig.CommandAsync("SetTransportFile", request =>
+        {
+            request["Kind"] = "service"; request["Name"] = "Sockets"; request["Path"] = path; request["Content"] = content; request["Sha256"] = sha; request["Restart"] = restart; request["By"] = "ana";
+        }).GetAwaiter().GetResult()!;
+        // Not JSON, not written; not the version that was opened, not written; not a file of the environment, not reached.
+        Assert.Equal("invalid-request", Write("appsettings.json", "{ broken", opened.Value<string>("Sha256"))["Error"]!.Value<string>("Code"));
+        Assert.Equal("invalid-state", Write("appsettings.json", "{ \"a\": 1 }", "0000")["Error"]!.Value<string>("Code"));
+        Assert.Equal("not-found", Write("App.exe", "x")["Error"]!.Value<string>("Code"));
+        Assert.Equal("not-found", Write("../../ConfigWorkers.json", "{}")["Error"]!.Value<string>("Code"));
+        Assert.Equal("{of sockets}", File.ReadAllText(Path.Combine(sockets, "appsettings.json")));
+        machine.Did.Clear();
+        var written = Write("appsettings.json", "{ \"Port\": 3001 }", opened.Value<string>("Sha256"), restart: true);
+        Assert.True(written.Value<bool>("Ok"), written.ToString());
+        Assert.Equal("{ \"Port\": 3001 }", File.ReadAllText(Path.Combine(sockets, "appsettings.json")));
+        Assert.True(written.Value<bool>("Restarted"));
+        Assert.Equal(["stop Sockets", "start Sockets"], machine.Did);
+        // What was there before is kept.
+        Assert.Equal("{of sockets}", File.ReadAllText(written.Value<string>("Backup")!));
+
+        // The inbox of a kind can be put somewhere else, and the folder is made.
+        var elsewhere = Path.Combine(rig.Directory, "drop", "apis");
+        var settings = await rig.CommandAsync("SetTransportInboxes", request => request["Inboxes"] = new JObject { ["api"] = elsewhere });
+        Assert.True(settings!.Value<bool>("Ok"), settings.ToString());
+        Assert.True(System.IO.Directory.Exists(elsewhere));
+        Assert.True(await Rig.Eventually(async () => (await rig.CommandAsync("TransportSettings"))!["Inboxes"]!["api"]!.Value<string>("Path") == elsewhere));
+        var now = (await rig.CommandAsync("TransportSettings"))!["Inboxes"]!;
+        Assert.Equal((true, false), (now["api"]!.Value<bool>("Said"), now["worker"]!.Value<bool>("Said")));
+        Assert.Equal("invalid-request", (await rig.CommandAsync("SetTransportInboxes", request => request["Inboxes"] = new JObject { ["api"] = "relative/folder" }))!["Error"]!.Value<string>("Code"));
+        Assert.Equal("invalid-request", (await rig.CommandAsync("SetTransportInboxes", request => request["Inboxes"] = new JObject { ["database"] = elsewhere }))!["Error"]!.Value<string>("Code"));
+
         Assert.Equal("not-found", (await rig.CommandAsync("TransportTarget", request => { request["Kind"] = "api"; request["Name"] = "Nothing"; }))!["Error"]!.Value<string>("Code"));
         Assert.Equal("invalid-request", (await rig.CommandAsync("TransportDeploy", request => { request["Package"] = "p"; request["Item"] = 1; request["Kind"] = "service"; request["Name"] = "Sockets"; request["File"] = "/nowhere.zip"; }))!["Error"]!.Value<string>("Code"));
     }

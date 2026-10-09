@@ -164,6 +164,18 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     }
 
     /// <summary>
+    /// Stops and starts whatever runs from the folder of a target, to make it read again what
+    /// was changed in its configuration. Gives what was done, or throws why it could not be.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RestartAsync(DeployTarget target, CancellationToken stopping)
+    {
+        var steps = new List<string>();
+        var wereOn = await Stop(target, steps.Add, stopping);
+        await Start(target, wereOn, steps.Add, stopping);
+        return steps;
+    }
+
+    /// <summary>
     /// Stops whatever runs from the folder. Gives the groups that were on, to turn those on again and no other.
     /// </summary>
     private async Task<IReadOnlyList<string>> Stop(DeployTarget target, Action<string> did, CancellationToken stopping)

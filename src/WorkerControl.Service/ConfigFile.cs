@@ -85,6 +85,22 @@ internal sealed class ConfigFile(string directory)
     /// Changes one group and leaves everything else in the file as it is. False when there is
     /// no such group.
     /// </summary>
+    /// <summary>
+    /// Changes one section at the root of the file, making it when it is not there, and leaves
+    /// everything else as it is.
+    /// </summary>
+    public void ChangeSection(string name, Action<JObject> change)
+    {
+        lock (_gate)
+        {
+            var root = JObject.Parse(Read(), new JsonLoadSettings { CommentHandling = CommentHandling.Ignore });
+            if (root[name] is not JObject section)
+                root[name] = section = new JObject();
+            change(section);
+            Write(root.ToString(Formatting.Indented));
+        }
+    }
+
     public bool ChangeGroup(string group, Action<JObject> change)
     {
         lock (_gate)

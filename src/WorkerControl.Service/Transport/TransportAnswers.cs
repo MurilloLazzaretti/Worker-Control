@@ -36,13 +36,20 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     private string InboxRoot => Path.GetFullPath(config()?.Transport.Inbox ?? "inbox", directory);
 
     /// <summary>
+    /// Where a new version of something of a kind is left: the folder said for the kind, or the
+    /// one of the kind under the general inbox.
+    /// </summary>
+    private string InboxOf(string kind) =>
+        config()?.Transport.Inboxes.TryGetValue(kind, out var said) == true ? Path.GetFullPath(said, directory) : Path.Combine(InboxRoot, kind);
+
+    /// <summary>
     /// Makes the inbox be there, with a folder for each kind, so that whoever brings a new
     /// version finds where to leave it.
     /// </summary>
     public void PrepareInbox()
     {
         foreach (var kind in Kinds)
-            Directory.CreateDirectory(Path.Combine(InboxRoot, kind));
+            Directory.CreateDirectory(InboxOf(kind));
     }
 
     /// <summary>
@@ -50,7 +57,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     /// </summary>
     private (string Path, bool IsZip)? Left(DeployTarget target)
     {
-        var root = Path.Combine(InboxRoot, target.Kind);
+        var root = InboxOf(target.Kind);
         if (!Directory.Exists(root) || target.Name.IndexOfAny(['/', '\\']) >= 0)
             return null;
         var folder = Directory.EnumerateDirectories(root).FirstOrDefault(path => Path.GetFileName(path).Equals(target.Name, StringComparison.OrdinalIgnoreCase));
@@ -66,6 +73,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     public JObject Targets() => Admin.Ok(answer =>
     {
         answer["Inbox"] = InboxRoot;
+        answer["Inboxes"] = new JObject(Kinds.Select(kind => new JProperty(kind, InboxOf(kind))));
         answer["Targets"] = new JArray(catalog.All().Select(target =>
         {
             var described = Describe(target);
@@ -81,8 +89,8 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         }));
         // What was left under a name that is no target of this machine: most likely a mistake in the name.
         var known = catalog.All().Select(target => (target.Kind, Name: target.Name.ToLowerInvariant())).ToHashSet();
-        answer["Unmatched"] = new JArray(Kinds.Where(kind => Directory.Exists(Path.Combine(InboxRoot, kind))).SelectMany(kind =>
-            Directory.EnumerateFileSystemEntries(Path.Combine(InboxRoot, kind))
+        answer["Unmatched"] = new JArray(Kinds.Where(kind => Directory.Exists(InboxOf(kind))).SelectMany(kind =>
+            Directory.EnumerateFileSystemEntries(InboxOf(kind))
                 .Where(path => Directory.Exists(path) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 .Where(path => !known.Contains((kind, (Directory.Exists(path) ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path)).ToLowerInvariant())))
                 .Select(path => (JToken)path)));
@@ -183,6 +191,215 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
             answer["Target"] = described;
             answer["File"] = file;
             answer["FromInbox"] = true;
+        });
+    }
+
+    // ---------------------------------------------------------------- settings
+
+    public JObject Settings() => Admin.Ok(answer =>
+    {
+        var transport = config()?.Transport ?? new TransportConfig();
+        answer["Inboxes"] = new JObject(Kinds.Select(kind => new JProperty(kind, new JObject
+        {
+            ["Path"] = InboxOf(kind),
+            ["Exists"] = Directory.Exists(InboxOf(kind)),
+            // False while it is the folder of the kind under the general inbox, which nobody had to say.
+            ["Said"] = transport.Inboxes.ContainsKey(kind)
+        })));
+        answer["Keep"] = new JArray(transport.Keep);
+        answer["KeepVersions"] = transport.KeepVersions;
+    });
+
+    /// <summary>
+    /// Says where the inbox of each kind is, and makes the folders. An empty path goes back to
+    /// the folder of the kind under the general inbox.
+    /// </summary>
+    public JObject SetInboxes(JObject? inboxes, ConfigFile file)
+    {
+        if (inboxes is null)
+            return Admin.Error("invalid-request", "\"Inboxes\" is required");
+        var said = new Dictionary<string, string>();
+        foreach (var item in inboxes.Properties())
+        {
+            var kind = item.Name.ToLowerInvariant();
+            if (!Kinds.Contains(kind) || item.Value.Type is not (JTokenType.String or JTokenType.Null))
+                return Admin.Error("invalid-request", "\"Inboxes\" takes worker, service, api and frontend, each with the path of a folder");
+            var path = ((string?)item.Value ?? "").Trim();
+            if (path.Length > 0 && !Path.IsPathFullyQualified(path))
+                return Admin.Error("invalid-request", $"The inbox of {kind} must be a full path, like D:\\Apps\\inbox\\{kind}");
+            said[kind] = path;
+        }
+
+        // Made before it is written down: a folder that cannot be made is not worth configuring.
+        foreach (var (kind, path) in said.Where(pair => pair.Value.Length > 0))
+        {
+            try
+            {
+                Directory.CreateDirectory(path);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return Admin.Error("invalid-state", $"The folder {path} could not be made: {error.Message}");
+            }
+        }
+
+        file.ChangeSection("Transport", transport =>
+        {
+            var kept = transport["Inboxes"] as JObject ?? new JObject();
+            foreach (var (kind, path) in said)
+            {
+                if (path.Length == 0)
+                    kept.Remove(kind);
+                else
+                    kept[kind] = path;
+            }
+            if (kept.Count == 0)
+                transport.Remove("Inboxes");
+            else
+                transport["Inboxes"] = kept;
+        });
+        return Admin.Ok();
+    }
+
+    // ---------------------------------------------------------------- the files of the environment
+
+    /// <summary>
+    /// What can be read and written as text, and how big it may be.
+    /// </summary>
+    private static readonly string[] TextExtensions = [".json", ".config", ".xml", ".ini", ".txt", ".yml", ".yaml", ".env", ".properties", ".conf", ".js"];
+    private const long MaxTextBytes = 1024 * 1024;
+
+    /// <summary>
+    /// The files of a target that belong to the environment and can be edited as text: the
+    /// ones no package ever replaces.
+    /// </summary>
+    private static IEnumerable<string> Editable(DeployTarget target, string folder)
+    {
+        if (!Directory.Exists(folder))
+            return [];
+        var root = Path.GetFullPath(folder);
+        return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(root, file).Replace('\\', '/'))
+            .Where(path => FileSet.IsKept(path, target.Keep) && TextExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            .Where(path => new FileInfo(Path.Combine(root, path)).Length <= MaxTextBytes)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string Sha(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
+
+    public JObject TargetFiles(string? kind, string? name)
+    {
+        if (catalog.Find(kind, name) is not { } target)
+            return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
+        return Admin.Ok(answer =>
+        {
+            answer["Target"] = Describe(target);
+            answer["Files"] = new JArray(target.Paths.SelectMany((folder, instance) => Editable(target, folder).Select(path =>
+            {
+                var info = new FileInfo(Path.Combine(folder, path));
+                return new JObject { ["Instance"] = instance, ["Folder"] = folder, ["Path"] = path, ["Size"] = info.Length, ["ModifiedAt"] = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero) };
+            })));
+        });
+    }
+
+    /// <summary>
+    /// The file of a target that was asked for, when it is one of the ones that can be edited.
+    /// Nothing outside the folder of the target is ever reached this way.
+    /// </summary>
+    private (string? Full, JObject? Refused) Locate(DeployTarget target, int instance, string? path)
+    {
+        if (instance < 0 || instance >= target.Paths.Count)
+            return (null, Admin.Error("invalid-request", "There is no such instance of this target"));
+        var folder = target.Paths[instance];
+        var wanted = (path ?? "").Replace('\\', '/').TrimStart('/');
+        if (Editable(target, folder).FirstOrDefault(known => known.Equals(wanted, StringComparison.OrdinalIgnoreCase)) is not { } found)
+            return (null, Admin.Error("not-found", "This is not a file of the environment that can be edited"));
+        return (Path.Combine(folder, found.Replace('/', Path.DirectorySeparatorChar)), null);
+    }
+
+    public JObject ReadFile(string? kind, string? name, int instance, string? path)
+    {
+        if (catalog.Find(kind, name) is not { } target)
+            return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
+        var (full, refused) = Locate(target, instance, path);
+        if (full is null)
+            return refused!;
+        var bytes = File.ReadAllBytes(full);
+        var bom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+        return Admin.Ok(answer =>
+        {
+            answer["Path"] = path;
+            answer["Instance"] = instance;
+            answer["Content"] = System.Text.Encoding.UTF8.GetString(bytes, bom ? 3 : 0, bytes.Length - (bom ? 3 : 0));
+            answer["Sha256"] = Sha(bytes);
+            answer["ModifiedAt"] = new DateTimeOffset(File.GetLastWriteTimeUtc(full), TimeSpan.Zero);
+        });
+    }
+
+    /// <summary>
+    /// Writes a file of the environment, keeping the one that was there. It is only written
+    /// over the version whoever edited it was looking at; and what runs from the folder is
+    /// started again when that is asked for.
+    /// </summary>
+    public JObject WriteFile(string? kind, string? name, int instance, string? path, string? content, string? expected, bool restart, CancellationToken stopping)
+    {
+        if (catalog.Find(kind, name) is not { } target)
+            return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
+        if (content is null)
+            return Admin.Error("invalid-request", "\"Content\" is required");
+        var (full, refused) = Locate(target, instance, path);
+        if (full is null)
+            return refused!;
+
+        var before = File.ReadAllBytes(full);
+        if (!string.IsNullOrEmpty(expected) && !string.Equals(expected, Sha(before), StringComparison.OrdinalIgnoreCase))
+            return Admin.Error("invalid-state", "The file was changed by somebody else since it was opened; open it again");
+        if (System.Text.Encoding.UTF8.GetByteCount(content) > MaxTextBytes)
+            return Admin.Error("invalid-request", "The file is too big to be written this way");
+        if (Path.GetExtension(full).Equals(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using var _ = System.Text.Json.JsonDocument.Parse(content, new System.Text.Json.JsonDocumentOptions { CommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            }
+            catch (System.Text.Json.JsonException error)
+            {
+                return Admin.Error("invalid-request", "This is not valid JSON, and was not written: " + error.Message);
+            }
+        }
+
+        var copy = Path.Combine(directory, "backup", "config", target.Kind, string.Concat(target.Name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_')),
+            $"{time.GetUtcNow():yyyyMMdd-HHmmss}", instance.ToString(), (path ?? "").Replace('\\', '/').TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+        File.WriteAllBytes(copy, before);
+
+        // As it was: with the mark at the beginning or without it.
+        var bom = before.Length >= 3 && before[0] == 0xEF && before[1] == 0xBB && before[2] == 0xBF;
+        var bytes = new System.Text.UTF8Encoding(bom).GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(content)).ToArray();
+        var aside = full + ".tmp";
+        File.WriteAllBytes(aside, bytes);
+        File.Move(aside, full, overwrite: true);
+
+        IReadOnlyList<string> steps = [];
+        string? problem = null;
+        if (restart)
+        {
+            try
+            {
+                steps = deployer.RestartAsync(target, stopping).GetAwaiter().GetResult();
+            }
+            catch (DeployFailed failed)
+            {
+                problem = failed.Message;
+            }
+        }
+        return Admin.Ok(answer =>
+        {
+            answer["Sha256"] = Sha(bytes);
+            answer["Backup"] = copy;
+            answer["Restarted"] = restart && problem is null;
+            answer["RestartProblem"] = problem;
+            answer["Messages"] = new JArray(steps);
         });
     }
 
