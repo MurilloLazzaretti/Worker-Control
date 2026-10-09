@@ -66,6 +66,33 @@ internal sealed class WindowsServiceManager : IServiceManager
         controller.Stop();
     }
 
+    public void Create(string name, string displayName, string executable, string startType) =>
+        Control("create", name, "binPath=", $"\"{executable}\"", "DisplayName=", displayName, "start=", startType == "Manual" ? "demand" : "auto");
+
+    public void Delete(string name) => Control("delete", name);
+
+    /// <summary>
+    /// The service control tool of Windows, which is how a service is registered and unregistered.
+    /// </summary>
+    private static void Control(params string[] arguments)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "sc.exe"))
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+            start.ArgumentList.Add(argument);
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("sc.exe could not be started");
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new InvalidOperationException("sc.exe did not answer in time");
+        }
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"sc {arguments[0]} {arguments[1]}: {string.Join(' ', output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))}");
+    }
+
     private static ServiceState Map(ServiceControllerStatus status) => status switch
     {
         ServiceControllerStatus.Running => ServiceState.Running,

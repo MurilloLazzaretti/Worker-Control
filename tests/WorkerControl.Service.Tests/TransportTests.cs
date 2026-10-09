@@ -189,11 +189,41 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
         Services[name] = NeverStops ? Services[name] with { State = ServiceState.Stopping } : Services[name] with { State = ServiceState.Stopped, ProcessId = 0 };
     }
 
+    public string? SiteThatFails { get; set; }
+
+    public void CreateSite(string name, int port, string folder)
+    {
+        if (name == SiteThatFails)
+            throw new InvalidOperationException("appcmd add site: the web server said no");
+        Did.Add($"site {name} {port}");
+        WebSites.Add(new WebSite(name, port, folder));
+    }
+
+    public void DeleteSite(string name)
+    {
+        Did.Add("unsite " + name);
+        WebSites.RemoveAll(site => site.Name == name);
+    }
+
+    public void Create(string name, string displayName, string executable, string startType)
+    {
+        Did.Add($"register {name} {startType}");
+        Services[name] = new InstalledService(name, displayName, executable, ServiceState.Stopped, startType, 0, 0);
+    }
+
+    public void Delete(string name)
+    {
+        Did.Add("unregister " + name);
+        Services.Remove(name);
+    }
+
+    public Dictionary<int, int> Listening { get; } = [];
+
     void IWebServer.Stop(IReadOnlyList<string> sites) => Did.Add("offline " + string.Join("+", sites));
 
     void IWebServer.Start(IReadOnlyList<string> sites) => Did.Add("online " + string.Join("+", sites));
 
-    public IReadOnlyDictionary<int, int> Listeners() => new Dictionary<int, int>();
+    public IReadOnlyDictionary<int, int> Listeners() => Listening;
 
     public MachineProcess? Process(int processId) => null;
 

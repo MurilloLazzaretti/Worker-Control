@@ -46,6 +46,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private DatabaseMonitor? _database;
     private TransportWork? _transport;
     private ProxyWork? _proxy;
+    private ApplicationWork? _applications;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -93,11 +94,14 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
         var transportDirectory = Path.GetFullPath(config.Transport.Directory, _directory);
         var targets = new TargetCatalog(() => _config, services, network, () => _frontends?.Snapshot().Apps ?? []);
-        _transport = new TransportWork(targets, new Deployer(new GroupSwitch(this), services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport"))
-            {
-                StopPatience = TimeSpan.FromSeconds(config.Transport.StopSeconds)
-            },
-            () => _config, transportDirectory, time);
+        var groupSwitch = new GroupSwitch(this);
+        var deployer = new Deployer(groupSwitch, services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport"))
+        {
+            StopPatience = TimeSpan.FromSeconds(config.Transport.StopSeconds)
+        };
+        _transport = new TransportWork(targets, deployer, () => _config, transportDirectory, time);
+        _applications = new ApplicationWork(targets, deployer, groupSwitch, services, webServer, network, () => _config, _file, () => Interlocked.Exchange(ref _reloadRequested, 1),
+            transportDirectory, time, loggers.CreateLogger("WorkerControl.Applications"));
         _proxy = new ProxyWork(() => _config, services, proxyTool, transportDirectory, time);
         try
         {
@@ -541,6 +545,35 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "put back as it was" : "not put back, " + answer.Value<string>("Problem"))}" + by);
+                return answer;
+            }
+
+            case "ApplicationDefaults":
+                return _applications!.Defaults();
+
+            case "ApplicationCreate":
+            {
+                var kind = request.Value<string>("Kind")?.Trim().ToLowerInvariant() ?? "";
+                var name = request.Value<string>("Name")?.Trim() ?? "";
+                var configs = (request["Configs"] as JArray ?? []).OfType<JObject>()
+                    .Select(item => new ApplicationWork.ConfigText(item.Value<string>("Path") ?? "", item.Value<string>("Content") ?? "")).ToList();
+                var answer = _applications!.Create(new ApplicationWork.NewApplication(kind, name, request.Value<string>("Folder")?.Trim() ?? "", request.Value<string>("File") ?? "",
+                    request.Value<string>("Executable")?.Trim(), request.Value<int?>("Instances") ?? 1, request.Value<int?>("Port") ?? 0, request.Value<string>("SiteName")?.Trim(),
+                    request.Value<string>("DisplayName"), request.Value<string>("StartType"), configs), lifetime.ApplicationStopping);
+                if (answer.Value<bool>("Ok"))
+                    Record(answer.Value<bool>("Created") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
+                        $"new {kind} {name} {(answer.Value<bool>("Created") ? "created in " + request.Value<string>("Folder") : "not created, " + answer.Value<string>("Problem"))}" + by);
+                return answer;
+            }
+
+            case "ApplicationRemove":
+            {
+                var kind = request.Value<string>("Kind")?.Trim().ToLowerInvariant();
+                var name = request.Value<string>("Name")?.Trim();
+                var answer = _applications!.Remove(kind, name, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping);
+                if (answer.Value<bool>("Ok"))
+                    Record(answer.Value<bool>("Removed") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
+                        $"{kind} {name} {(answer.Value<bool>("Removed") ? "removed from this machine; its folder is kept in " + answer.Value<string>("Kept") : "not removed, " + answer.Value<string>("Problem"))}" + by);
                 return answer;
             }
 

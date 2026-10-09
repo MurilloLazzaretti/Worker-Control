@@ -76,6 +76,16 @@ public interface IServiceManager
     InstalledService? Find(string name);
 
     /// <summary>
+    /// Registers a service that runs an executable, under the account of the system. Throws when it is refused.
+    /// </summary>
+    void Create(string name, string displayName, string executable, string startType) => throw new InvalidOperationException("Services can only be registered on Windows");
+
+    /// <summary>
+    /// Takes a service out of the ones registered on the machine. Throws when it is refused.
+    /// </summary>
+    void Delete(string name) => throw new InvalidOperationException("Services can only be unregistered on Windows");
+
+    /// <summary>
     /// Asks the service to start. Does not wait for it. Throws when the request is refused.
     /// </summary>
     void Start(string name);

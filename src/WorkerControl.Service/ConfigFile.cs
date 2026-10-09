@@ -101,6 +101,38 @@ internal sealed class ConfigFile(string directory)
         }
     }
 
+    /// <summary>
+    /// Adds a group to the end of the list. False when there is one of that name already.
+    /// </summary>
+    public bool AddGroup(JObject group)
+    {
+        lock (_gate)
+        {
+            var root = JObject.Parse(Read(), new JsonLoadSettings { CommentHandling = CommentHandling.Ignore });
+            if (root["WorkerGroups"] is not JArray list)
+                root["WorkerGroups"] = list = [];
+            if (list.OfType<JObject>().Any(item => string.Equals((string?)item["Name"], (string?)group["Name"], StringComparison.OrdinalIgnoreCase)))
+                return false;
+            list.Add(group);
+            Write(root.ToString(Formatting.Indented));
+            return true;
+        }
+    }
+
+    public bool RemoveGroup(string group)
+    {
+        lock (_gate)
+        {
+            var root = JObject.Parse(Read(), new JsonLoadSettings { CommentHandling = CommentHandling.Ignore });
+            var found = (root["WorkerGroups"] as JArray)?.OfType<JObject>().FirstOrDefault(item => (string?)item["Name"] == group);
+            if (found is null)
+                return false;
+            found.Remove();
+            Write(root.ToString(Formatting.Indented));
+            return true;
+        }
+    }
+
     public bool ChangeGroup(string group, Action<JObject> change)
     {
         lock (_gate)

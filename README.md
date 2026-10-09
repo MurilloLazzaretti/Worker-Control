@@ -319,6 +319,7 @@ cannot be, or is to be said otherwise, goes here.
 "Transport": {
   "KeepVersions": 3,
   "StopSeconds": 90,
+  "AllowCreate": true,
   "Keep": ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.ini", "environment.js", "env.json", "*.db", "*.db-wal", "*.db-shm", "logs/"],
   "Targets": [
     { "Kind": "service", "Name": "MyWrappedService", "Paths": ["D:\\Apps\\my-service"] },

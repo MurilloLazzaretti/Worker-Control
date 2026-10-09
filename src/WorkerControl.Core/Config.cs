@@ -130,6 +130,22 @@ public sealed record TransportConfig
     public int StopSeconds { get; init; } = DefaultStopSeconds;
 
     /// <summary>
+    /// Whether an application this machine does not have yet may be created on it, and one it has removed.
+    /// </summary>
+    public bool AllowCreate { get; init; } = true;
+
+    /// <summary>
+    /// The folder the applications of each kind (worker, api, service) are created in. A kind
+    /// that is not said goes where most of the ones of its kind already are.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> CreateFolders { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// How the sites of an application are named, with {name} and {n}. Not said, they are named as most of the ones there are.
+    /// </summary>
+    public string? SiteName { get; init; }
+
+    /// <summary>
     /// What belongs to the environment and is never taken into a package nor replaced by one:
     /// file names with wildcards, and folders written with a slash at the end.
     /// </summary>
@@ -724,9 +740,32 @@ public static class ConfigReader
             Inboxes = ReadInboxes(transport, where),
             KeepVersions = Integer(transport, "KeepVersions", where, defaultValue: 3, minimum: 0),
             StopSeconds = Integer(transport, "StopSeconds", where, defaultValue: TransportConfig.DefaultStopSeconds, minimum: 5),
+            AllowCreate = Boolean(transport, "AllowCreate", where, defaultValue: true),
+            CreateFolders = ReadFolders(transport, "CreateFolders", where),
+            SiteName = Text(transport, "SiteName", where) is { Length: > 0 } siteName ? siteName.Trim() : null,
             Keep = Texts(transport, "Keep", where) ?? TransportConfig.DefaultKeep,
             Targets = targets
         };
+    }
+
+    private static Dictionary<string, string> ReadFolders(JsonElement transport, string name, string where)
+    {
+        var folders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!transport.TryGetProperty(name, out var said) || said.ValueKind == JsonValueKind.Null)
+            return folders;
+        if (said.ValueKind != JsonValueKind.Object)
+            throw new ConfigException($"\"{name}\" must be an object in {where}");
+        foreach (var item in said.EnumerateObject())
+        {
+            var kind = item.Name.Trim().ToLowerInvariant();
+            if (kind is not ("worker" or "service" or "api"))
+                throw new ConfigException($"\"{name}\" takes worker, service and api in {where}");
+            if (item.Value.ValueKind != JsonValueKind.String)
+                throw new ConfigException($"The folder of {kind} must be a path in {where}");
+            if (item.Value.GetString()!.Trim() is { Length: > 0 } path)
+                folders[kind] = path;
+        }
+        return folders;
     }
 
     private static Dictionary<string, string> ReadInboxes(JsonElement transport, string where)

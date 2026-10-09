@@ -70,6 +70,16 @@ public interface IWebServer
     /// The processes still serving the sites.
     /// </summary>
     IReadOnlyList<int> ProcessIds(IReadOnlyList<string> sites);
+
+    /// <summary>
+    /// A site listening on a port and serving a folder, with a pool of its own, of the same name.
+    /// </summary>
+    void CreateSite(string name, int port, string folder) => throw new InvalidOperationException("Sites cannot be created on this system");
+
+    /// <summary>
+    /// Takes a site away, and its pool when nothing else uses it.
+    /// </summary>
+    void DeleteSite(string name) => throw new InvalidOperationException("Sites cannot be removed on this system");
 }
 
 /// <summary>
@@ -288,6 +298,11 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     /// Stops whatever runs from the folder. Gives the groups that were on, to turn those on again and no other.
     /// </summary>
     /// <summary>
+    /// Stops whatever runs from the folder of a target, to take it away.
+    /// </summary>
+    public Task<IReadOnlyList<string>> StopAsync(DeployTarget target, bool force, Action<string> did, CancellationToken stopping) => Stop(target, did, force, stopping);
+
+    /// <summary>
     /// Waits for what was asked to stop. What is still there when the time is over is ended by
     /// force, when that was asked for; otherwise it is left as it is and said.
     /// </summary>
@@ -504,6 +519,50 @@ internal sealed class IisWebServer : IWebServer
                 ids.AddRange(output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(line => int.TryParse(line, out var id) ? id : 0).Where(id => id > 0));
         }
         return ids;
+    }
+
+    public void CreateSite(string name, int port, string folder)
+    {
+        // No managed code: what it serves brings its own runtime.
+        Must($"add apppool /name:\"{name}\" /managedRuntimeVersion:\"\"");
+        try
+        {
+            Must($"add site /name:\"{name}\" /bindings:http/*:{port}: /physicalPath:\"{folder}\"");
+            try
+            {
+                Must($"set app \"{name}/\" /applicationPool:\"{name}\"");
+            }
+            catch (InvalidOperationException)
+            {
+                Execute($"delete site \"{name}\"");
+                throw;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            Execute($"delete apppool \"{name}\"");
+            throw;
+        }
+    }
+
+    public void DeleteSite(string name)
+    {
+        var pools = Pools([name]);
+        Must($"delete site \"{name}\"");
+        foreach (var pool in pools)
+        {
+            // A pool something else still runs in stays.
+            var (code, output) = Execute($"list app /apppool.name:\"{pool}\" /text:APP.NAME");
+            if (code == 0 && string.IsNullOrWhiteSpace(output))
+                Must($"delete apppool \"{pool}\"");
+        }
+    }
+
+    private static void Must(string arguments)
+    {
+        var (code, output) = Execute(arguments);
+        if (code != 0)
+            throw new InvalidOperationException($"appcmd {arguments.Split(' ')[0]} {arguments.Split(' ')[1]}: {output.Trim()}");
     }
 
     private static List<string> Pools(IReadOnlyList<string> sites)
