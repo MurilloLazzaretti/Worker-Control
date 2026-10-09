@@ -76,6 +76,13 @@ public sealed record TransportConfig
     public string Directory { get; init; } = "transport";
 
     /// <summary>
+    /// Where a new version of something is left to be taken into a package: a folder for each
+    /// kind and, in it, a folder (or a zip) with the name of the target. Relative to
+    /// <see cref="Directory"/> unless it is a full path.
+    /// </summary>
+    public string Inbox { get; init; } = "inbox";
+
+    /// <summary>
     /// How many replaced versions of each target are kept, to go back to.
     /// </summary>
     public int KeepVersions { get; init; } = 3;
@@ -659,6 +666,7 @@ public static class ConfigReader
         return new TransportConfig
         {
             Directory = Text(transport, "Directory", where) is { Length: > 0 } directory ? directory.Trim() : "transport",
+            Inbox = Text(transport, "Inbox", where) is { Length: > 0 } inbox ? inbox.Trim() : "inbox",
             KeepVersions = Integer(transport, "KeepVersions", where, defaultValue: 3, minimum: 0),
             Keep = Texts(transport, "Keep", where) ?? TransportConfig.DefaultKeep,
             Targets = targets

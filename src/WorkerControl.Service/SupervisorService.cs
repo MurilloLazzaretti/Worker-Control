@@ -94,6 +94,14 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         var targets = new TargetCatalog(() => _config, services, network, () => _frontends?.Snapshot().Apps ?? []);
         _transport = new TransportWork(targets, new Deployer(new GroupSwitch(this), services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport")),
             () => _config, transportDirectory, time);
+        try
+        {
+            _transport.PrepareInbox();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning("The inbox of the transport could not be made: {Error}", error.Message);
+        }
 
         Record(EventKind.ServiceStarted, $"version {ServiceHost.Version}");
         supervisor.ApplyConfig(config);
@@ -482,7 +490,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 return _transport!.Target(request.Value<string>("Kind"), request.Value<string>("Name"));
 
             case "TransportCapture":
-                return _transport!.Capture(request.Value<string>("Kind"), request.Value<string>("Name"));
+                return _transport!.Capture(request.Value<string>("Kind"), request.Value<string>("Name"), request.Value<bool?>("Incoming") == true);
 
             case "TransportDeploy":
             {

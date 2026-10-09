@@ -330,6 +330,9 @@ cannot be, or is to be said otherwise, goes here.
   `transport/backup`, makes the folder hold exactly the files of the package and starts it
   again. What is in `Keep` is never packed nor replaced. If the files cannot all be put, the
   copy is put back first.
+- A new version is left in the inbox, `transport/inbox/<kind>/<name>` beside the service
+  (`"Inbox"` says another place): a folder, or a zip, with the name of the target under
+  `worker`, `service`, `api` or `frontend`. The panel takes it from there into a package.
 - A service that is run by a wrapper says nothing of where its program is: name its folder here.
 - Sites are taken off the air by stopping their application pools with `appcmd.exe`, which asks
   for the service to run with enough rights to do it.

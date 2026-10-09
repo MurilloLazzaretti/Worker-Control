@@ -451,6 +451,33 @@ public class TransportAdminTests
         Assert.Equal(["stop Sockets", "start Sockets"], machine.Did);
         Assert.StartsWith(Path.Combine(rig.Directory, "transport", "backup", "service", "Sockets"), deployed.Value<string>("Backup"));
 
+        // A new version left in the inbox, under the kind and the name of the target, is taken from there.
+        var inbox = (await rig.CommandAsync("TransportTargets"))!.Value<string>("Inbox")!;
+        Assert.True(System.IO.Directory.Exists(Path.Combine(inbox, "api")));
+        var left = Path.Combine(inbox, "service", "orders");
+        System.IO.Directory.CreateDirectory(Path.Combine(left, "lib"));
+        File.WriteAllText(Path.Combine(left, "App.exe"), "v3");
+        File.WriteAllText(Path.Combine(left, "lib", "New.dll"), "new");
+        File.WriteAllText(Path.Combine(left, "appsettings.json"), "{of the developer}");
+        System.IO.Directory.CreateDirectory(Path.Combine(inbox, "service", "Typo"));
+        var listed = await rig.CommandAsync("TransportTargets");
+        Assert.Equal(3, listed!["Targets"]!.Single(target => (string?)target["Name"] == "Orders")["Incoming"]!.Value<int>("Files"));
+        Assert.Null(listed["Targets"]!.Single(target => (string?)target["Name"] == "Sockets")["Incoming"]);
+        Assert.EndsWith("Typo", (string?)listed["Unmatched"]!.Single());
+        // Just written: it may still be being copied.
+        var early = await rig.CommandAsync("TransportCapture", request => { request["Kind"] = "service"; request["Name"] = "Orders"; request["Incoming"] = true; });
+        Assert.Equal("invalid-state", early!["Error"]!.Value<string>("Code"));
+        foreach (var file in System.IO.Directory.EnumerateFiles(left, "*", SearchOption.AllDirectories))
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddMinutes(-1));
+        var taken = await rig.CommandAsync("TransportCapture", request => { request["Kind"] = "service"; request["Name"] = "Orders"; request["Incoming"] = true; });
+        Assert.True(taken!.Value<bool>("Ok"), taken.ToString());
+        using (var incoming = ZipFile.OpenRead(taken.Value<string>("File")!))
+            Assert.Equal(["App.exe", "lib/New.dll"], incoming.Entries.Select(entry => entry.FullName).Order());
+        // Taken, it is no longer there; and what Orders runs was not touched.
+        Assert.False(System.IO.Directory.Exists(left));
+        Assert.Equal("v2", File.ReadAllText(Path.Combine(orders, "App.exe")));
+        Assert.Equal("not-found", (await rig.CommandAsync("TransportCapture", request => { request["Kind"] = "service"; request["Name"] = "Orders"; request["Incoming"] = true; }))!["Error"]!.Value<string>("Code"));
+
         Assert.Equal("not-found", (await rig.CommandAsync("TransportTarget", request => { request["Kind"] = "api"; request["Name"] = "Nothing"; }))!["Error"]!.Value<string>("Code"));
         Assert.Equal("invalid-request", (await rig.CommandAsync("TransportDeploy", request => { request["Package"] = "p"; request["Item"] = 1; request["Kind"] = "service"; request["Name"] = "Sockets"; request["File"] = "/nowhere.zip"; }))!["Error"]!.Value<string>("Code"));
     }

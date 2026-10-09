@@ -25,7 +25,68 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     private static JArray Files(IEnumerable<FileEntry> files) =>
         new(files.Select(file => new JObject { ["Path"] = file.Path, ["Size"] = file.Size, ["Sha256"] = file.Sha256 }));
 
-    public JObject Targets() => Admin.Ok(answer => answer["Targets"] = new JArray(catalog.All().Select(Describe)));
+    public static readonly string[] Kinds = ["worker", "service", "api", "frontend"];
+
+    /// <summary>
+    /// For how long what was left in the inbox has to be still before it is taken: a folder
+    /// that is being copied is not a version yet.
+    /// </summary>
+    public TimeSpan Settle { get; init; } = TimeSpan.FromSeconds(5);
+
+    private string InboxRoot => Path.GetFullPath(config()?.Transport.Inbox ?? "inbox", directory);
+
+    /// <summary>
+    /// Makes the inbox be there, with a folder for each kind, so that whoever brings a new
+    /// version finds where to leave it.
+    /// </summary>
+    public void PrepareInbox()
+    {
+        foreach (var kind in Kinds)
+            Directory.CreateDirectory(Path.Combine(InboxRoot, kind));
+    }
+
+    /// <summary>
+    /// What was left for a target: a folder with its name or a zip with its name, under the folder of its kind.
+    /// </summary>
+    private (string Path, bool IsZip)? Left(DeployTarget target)
+    {
+        var root = Path.Combine(InboxRoot, target.Kind);
+        if (!Directory.Exists(root) || target.Name.IndexOfAny(['/', '\\']) >= 0)
+            return null;
+        var folder = Directory.EnumerateDirectories(root).FirstOrDefault(path => Path.GetFileName(path).Equals(target.Name, StringComparison.OrdinalIgnoreCase));
+        if (folder is not null && Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Any())
+            return (folder, false);
+        var zip = Directory.EnumerateFiles(root, "*.zip").FirstOrDefault(path => Path.GetFileNameWithoutExtension(path).Equals(target.Name, StringComparison.OrdinalIgnoreCase));
+        return zip is null ? null : (zip, true);
+    }
+
+    private static DateTime LastWrite((string Path, bool IsZip) left) =>
+        left.IsZip ? File.GetLastWriteTimeUtc(left.Path) : Directory.EnumerateFiles(left.Path, "*", SearchOption.AllDirectories).Select(File.GetLastWriteTimeUtc).DefaultIfEmpty(DateTime.MinValue).Max();
+
+    public JObject Targets() => Admin.Ok(answer =>
+    {
+        answer["Inbox"] = InboxRoot;
+        answer["Targets"] = new JArray(catalog.All().Select(target =>
+        {
+            var described = Describe(target);
+            // What is waiting in the inbox for this target, if anything is.
+            if (Left(target) is { } left)
+                described["Incoming"] = new JObject
+                {
+                    ["Path"] = left.Path,
+                    ["At"] = new DateTimeOffset(LastWrite(left), TimeSpan.Zero),
+                    ["Files"] = left.IsZip ? null : Directory.EnumerateFiles(left.Path, "*", SearchOption.AllDirectories).Count()
+                };
+            return described;
+        }));
+        // What was left under a name that is no target of this machine: most likely a mistake in the name.
+        var known = catalog.All().Select(target => (target.Kind, Name: target.Name.ToLowerInvariant())).ToHashSet();
+        answer["Unmatched"] = new JArray(Kinds.Where(kind => Directory.Exists(Path.Combine(InboxRoot, kind))).SelectMany(kind =>
+            Directory.EnumerateFileSystemEntries(Path.Combine(InboxRoot, kind))
+                .Where(path => Directory.Exists(path) || path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                .Where(path => !known.Contains((kind, (Directory.Exists(path) ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path)).ToLowerInvariant())))
+                .Select(path => (JToken)path)));
+    });
 
     /// <summary>
     /// One target and the files it has now, without what belongs to the environment.
@@ -46,10 +107,12 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     /// Packs what the target is running now, to go into a package. The file is left where the
     /// panel, on the same machine, picks it up.
     /// </summary>
-    public JObject Capture(string? kind, string? name)
+    public JObject Capture(string? kind, string? name, bool fromInbox = false)
     {
         if (catalog.Find(kind, name) is not { } target)
             return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
+        if (fromInbox)
+            return CaptureIncoming(target);
         if (target.Problem is not null)
             return Admin.Error("invalid-state", target.Problem);
         if (target.Paths.FirstOrDefault(Directory.Exists) is not { } folder)
@@ -77,6 +140,49 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
             answer["Size"] = stream.Length;
             answer["Sha256"] = hash;
             answer["Files"] = Files(files);
+        });
+    }
+
+    /// <summary>
+    /// Takes what was left in the inbox for a target, packed, and empties its place there: from
+    /// now on it is in the hands of whoever asked for it.
+    /// </summary>
+    private JObject CaptureIncoming(DeployTarget target)
+    {
+        if (Left(target) is not { } left)
+            return Admin.Error("not-found", $"Nothing was left in the inbox for {target.Kind} {target.Name}");
+        if (time.GetUtcNow().UtcDateTime - LastWrite(left) < Settle)
+            return Admin.Error("invalid-state", "What is in the inbox is still being written; wait for the copy to end");
+
+        var staging = Path.Combine(directory, "out");
+        Directory.CreateDirectory(staging);
+        var file = Path.Combine(staging, Guid.NewGuid().ToString("N") + ".zip");
+        try
+        {
+            if (left.IsZip)
+                File.Move(left.Path, file);
+            else
+            {
+                if (FileSet.Zip(left.Path, target.Keep, file).Count == 0)
+                {
+                    File.Delete(file);
+                    return Admin.Error("invalid-state", $"The folder {left.Path} has no file to carry");
+                }
+                Directory.Delete(left.Path, recursive: true);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return Admin.Error("invalid-state", "What is in the inbox could not be taken, most likely because it is still open somewhere: " + error.Message);
+        }
+        return Admin.Ok(answer =>
+        {
+            // The version the target says it is belongs to what runs, not to what was left to replace it.
+            var described = Describe(target);
+            described["Version"] = null;
+            answer["Target"] = described;
+            answer["File"] = file;
+            answer["FromInbox"] = true;
         });
     }
 
