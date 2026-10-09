@@ -84,6 +84,7 @@ public sealed class Rig : IAsyncDisposable
           "WorkerGroups": [ {{string.Join(",", groups)}} ]
           {{(ServicesJson is null ? "" : ", \"Services\": " + ServicesJson)}}
           {{(DatabaseJson is null ? "" : ", \"Database\": " + DatabaseJson)}}
+          {{ExtraJson ?? ""}}
         }
         """);
 
@@ -91,6 +92,11 @@ public sealed class Rig : IAsyncDisposable
     /// The "Services" section of the configuration file, when the test wants one.
     /// </summary>
     public string? ServicesJson { get; set; }
+
+    /// <summary>
+    /// Whatever else the test wants at the root of the configuration file, starting with a comma.
+    /// </summary>
+    public string? ExtraJson { get; set; }
 
     /// <summary>
     /// The "Database" section of the configuration file, when the test wants one.

@@ -70,6 +70,8 @@ public static class ServiceHost
             else
                 builder.Services.AddSingleton<Transport.IWebServer, Transport.NoWebServer>();
         }
+        if (!builder.Services.Any(service => service.ServiceType == typeof(IProxyTool)))
+            builder.Services.AddSingleton<IProxyTool, ProxyTool>();
         if (!builder.Services.Any(service => service.ServiceType == typeof(Database.IDatabaseWriter)))
             builder.Services.AddSingleton<Database.IDatabaseWriter, Database.SqlServerWriter>();
         if (!builder.Services.Any(service => service.ServiceType == typeof(Database.ISecretProtector)))

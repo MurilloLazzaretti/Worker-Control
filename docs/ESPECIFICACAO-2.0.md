@@ -241,6 +241,8 @@ Têm o campo `Command` em vez de `Message`, e `Version` com a versão do contrat
 | `DatabaseObjects`, `DatabaseObject` | Os objetos dos bancos acompanhados e o detalhe de cada um, com o script que o cria |
 | `TransportTargets`, `TransportTarget`, `TransportCapture`, `TransportDeploy` | O que pode ser substituído na máquina, os arquivos de um alvo, o empacotamento do que está rodando e a troca pelo que um pacote aprovado traz. Especificados em `docs/TRANSPORTE.md` do ZapMQ |
 | `TransportSettings`, `SetTransportInboxes`, `TransportFiles`, `TransportFile`, `SetTransportFile` | As pastas de entrada por tipo, e a leitura e a gravação dos arquivos de configuração de uma aplicação, com cópia do que estava e reinício opcional |
+| `Proxy`, `ProxyFile`, `SetProxyFile`, `ProxyTest`, `ProxyReload`, `ProxyRestart` | A configuração do proxy reverso: os arquivos, a leitura, a gravação testada pelo próprio proxy, a recarga e o reinício do serviço |
+| `DatabaseSearch` | Os objetos cujo script tem um texto, com as linhas em que ele aparece |
 | `DatabaseApply` | Aplica ao banco um item de um pacote aprovado no painel: define um objeto pelo script, apaga um, ou roda um script. Especificado em `docs/TRANSPORTE.md` do ZapMQ |
 | `DatabaseChanges`, `DatabaseChange` | O que mudou nos objetos dos bancos acompanhados, e uma alteração com o script de antes e o de depois |
 | `Database`, `DatabaseHistory`, `DatabaseQueries` | A saúde da instância de banco de dados do ambiente, seu histórico e as consultas mais caras. Especificados em `docs/BANCO.md` do ZapMQ |

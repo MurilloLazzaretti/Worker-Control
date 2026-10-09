@@ -34,6 +34,14 @@ internal sealed class ObjectWatcher(IDatabaseSource source, ObjectHistory histor
         var byId = known.Values.GroupBy(item => (item.Kind, item.Id)).ToDictionary(group => group.Key, group => group.First());
         var present = listed.Select(item => Key(item.Kind, item.Schema, item.Name)).ToHashSet();
         var changes = new List<ObjectChange>();
+        // What packages did since the last look: a change to one of these objects was brought by its package.
+        var applied = history.Applied(database, now);
+        string? Brought(string kind, string schema, string name) =>
+            applied.Where(item => item.Kind is not null && item.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(item.Schema, schema, StringComparison.OrdinalIgnoreCase) && string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase))
+                .Select(item => item.Package).FirstOrDefault()
+            // A script says nothing of what it touches: whatever else changed at the same time is taken to be its doing.
+            ?? applied.Where(item => item.Kind is null).Select(item => item.Package).FirstOrDefault();
         var read = 0;
         var looked = 0;
 
@@ -66,7 +74,7 @@ internal sealed class ObjectWatcher(IDatabaseSource source, ObjectHistory histor
                 {
                     At = now, Database = database, Kind = item.Kind, Schema = item.Schema, Name = item.Name, Action = "Altered", ModifiedAt = item.ModifiedAt,
                     OldFingerprint = before.Fingerprint, NewFingerprint = detail.Fingerprint, OldScript = history.Script(database, item.Kind, item.Schema, item.Name), NewScript = detail.Script,
-                    Login = author?.Login, Host = author?.Host, Application = author?.Application
+                    Login = author?.Login, Host = author?.Host, Application = author?.Application, Package = Brought(item.Kind, item.Schema, item.Name)
                 });
             }
             else if (baseline is not null)
@@ -82,7 +90,7 @@ internal sealed class ObjectWatcher(IDatabaseSource source, ObjectHistory histor
                     OldName = renamed is null ? null : renamed.Schema + "." + renamed.Name, ModifiedAt = item.ModifiedAt,
                     OldFingerprint = renamed?.Fingerprint, NewFingerprint = detail.Fingerprint,
                     OldScript = renamed is null ? null : history.Script(database, renamed.Kind, renamed.Schema, renamed.Name), NewScript = detail.Script,
-                    Login = author?.Login, Host = author?.Host, Application = author?.Application
+                    Login = author?.Login, Host = author?.Host, Application = author?.Application, Package = Brought(item.Kind, item.Schema, item.Name)
                 });
                 if (renamed is not null)
                 {
@@ -102,12 +110,13 @@ internal sealed class ObjectWatcher(IDatabaseSource source, ObjectHistory histor
                 {
                     At = now, Database = database, Kind = gone.Kind, Schema = gone.Schema, Name = gone.Name, Action = "Dropped",
                     OldFingerprint = gone.Fingerprint, OldScript = history.Script(database, gone.Kind, gone.Schema, gone.Name),
-                    Login = author?.Login, Host = author?.Host, Application = author?.Application
+                    Login = author?.Login, Host = author?.Host, Application = author?.Application, Package = Brought(gone.Kind, gone.Schema, gone.Name)
                 });
             }
             history.Forget(database, gone.Kind, gone.Schema, gone.Name);
         }
 
+        history.ForgetApplied(database, now);
         var saved = changes.Select(change => change with { Id = history.Add(change), OldScript = null, NewScript = null }).ToList();
         if (baseline is null)
         {

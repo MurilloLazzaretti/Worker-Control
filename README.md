@@ -341,6 +341,20 @@ cannot be, or is to be said otherwise, goes here.
 - Sites are taken off the air by stopping their application pools with `appcmd.exe`, which asks
   for the service to run with enough rights to do it.
 
+### Reverse proxy
+
+The configuration of the reverse proxy (NGINX) can be seen and changed from the panel: the main
+file and the `.conf` files it includes. It is found beside the access log of `Traffic`, unless
+this says where it is:
+
+```json
+"Proxy": { "Config": "C:\\nginx\\conf\\nginx.conf", "Executable": "C:\\nginx\\nginx.exe", "Service": "nginx" }
+```
+
+A file is written and the proxy itself is asked whether the whole configuration is still good
+(`nginx -t`); if it is not, the file goes back to what it was. Nothing is in force until the
+proxy is asked to read it again (`nginx -s reload`) or its service is restarted.
+
 ## ⚙️ Installation
 
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.

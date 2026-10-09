@@ -36,6 +36,11 @@ public sealed record ObjectChange
     public string? Application { get; init; }
 
     /// <summary>
+    /// The package of changes that brought it, when it was not done straight on the database.
+    /// </summary>
+    public string? Package { get; init; }
+
+    /// <summary>
     /// Only given when one change is asked for.
     /// </summary>
     public string? OldScript { get; init; }
@@ -84,7 +89,17 @@ internal sealed class ObjectHistory : IDisposable
             CREATE INDEX IF NOT EXISTS change_at ON change (at);
             CREATE INDEX IF NOT EXISTS change_object ON change (db, kind, schema, name);
             CREATE TABLE IF NOT EXISTS baseline (db TEXT PRIMARY KEY COLLATE NOCASE, at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS applied (
+                db TEXT NOT NULL COLLATE NOCASE, kind TEXT, schema TEXT COLLATE NOCASE, name TEXT COLLATE NOCASE, package TEXT NOT NULL, at INTEGER NOT NULL);
             """);
+        // A file from before a change said which package brought it.
+        try
+        {
+            Run("ALTER TABLE change ADD COLUMN package TEXT");
+        }
+        catch (SqliteException)
+        {
+        }
     }
 
     private void Run(string text, params (string Name, object? Value)[] values)
@@ -169,18 +184,18 @@ internal sealed class ObjectHistory : IDisposable
         lock (_gate)
         {
             using var command = Command("""
-                INSERT INTO change (at, db, kind, schema, name, action, old_name, modified, old_fingerprint, new_fingerprint, old_script, new_script, login, host, app)
-                VALUES ($at, $db, $kind, $schema, $name, $action, $old, $modified, $oldPrint, $newPrint, $oldScript, $newScript, $login, $host, $app);
+                INSERT INTO change (at, db, kind, schema, name, action, old_name, modified, old_fingerprint, new_fingerprint, old_script, new_script, login, host, app, package)
+                VALUES ($at, $db, $kind, $schema, $name, $action, $old, $modified, $oldPrint, $newPrint, $oldScript, $newScript, $login, $host, $app, $package);
                 SELECT last_insert_rowid();
                 """,
                 ("$at", change.At.ToUnixTimeMilliseconds()), ("$db", change.Database), ("$kind", change.Kind), ("$schema", change.Schema), ("$name", change.Name),
                 ("$action", change.Action), ("$old", change.OldName), ("$modified", Ticks(change.ModifiedAt)), ("$oldPrint", change.OldFingerprint), ("$newPrint", change.NewFingerprint),
-                ("$oldScript", change.OldScript), ("$newScript", change.NewScript), ("$login", change.Login), ("$host", change.Host), ("$app", change.Application));
+                ("$oldScript", change.OldScript), ("$newScript", change.NewScript), ("$login", change.Login), ("$host", change.Host), ("$app", change.Application), ("$package", change.Package));
             return (long)command.ExecuteScalar()!;
         }
     }
 
-    private const string Fields = "id, at, db, kind, schema, name, action, old_name, modified, old_fingerprint, new_fingerprint, login, host, app";
+    private const string Fields = "id, at, db, kind, schema, name, action, old_name, modified, old_fingerprint, new_fingerprint, login, host, app, package";
 
     private static ObjectChange Read(SqliteDataReader row) => new()
     {
@@ -197,7 +212,8 @@ internal sealed class ObjectHistory : IDisposable
         NewFingerprint = Maybe(row, 10),
         Login = Maybe(row, 11),
         Host = Maybe(row, 12),
-        Application = Maybe(row, 13)
+        Application = Maybe(row, 13),
+        Package = Maybe(row, 14)
     };
 
     /// <summary>
@@ -243,7 +259,53 @@ internal sealed class ObjectHistory : IDisposable
         {
             using var command = Command($"SELECT {Fields}, old_script, new_script FROM change WHERE id = $id", ("$id", id));
             using var reader = command.ExecuteReader();
-            return reader.Read() ? Read(reader) with { OldScript = Maybe(reader, 14), NewScript = Maybe(reader, 15) } : null;
+            return reader.Read() ? Read(reader) with { OldScript = Maybe(reader, 15), NewScript = Maybe(reader, 16) } : null;
+        }
+    }
+
+    /// <summary>
+    /// Notes that a package was applied to a database: to one object, or, for a script, to
+    /// whatever it touched. The next look at the objects says so of what it finds changed.
+    /// </summary>
+    public void NoteApplied(string database, string? kind, string? schema, string? name, string package, DateTimeOffset at) =>
+        Run("INSERT INTO applied VALUES ($db, $kind, $schema, $name, $package, $at)",
+            ("$db", database), ("$kind", kind), ("$schema", schema), ("$name", name), ("$package", package), ("$at", at.ToUnixTimeMilliseconds()));
+
+    /// <summary>
+    /// What packages did to a database up to a moment, and has not been looked at yet: the
+    /// latest first. An entry without an object is of a script.
+    /// </summary>
+    public List<(string? Kind, string? Schema, string? Name, string Package)> Applied(string database, DateTimeOffset until)
+    {
+        lock (_gate)
+        {
+            using var command = Command("SELECT kind, schema, name, package FROM applied WHERE db = $db AND at <= $until ORDER BY at DESC", ("$db", database), ("$until", until.ToUnixTimeMilliseconds()));
+            using var reader = command.ExecuteReader();
+            var applied = new List<(string?, string?, string?, string)>();
+            while (reader.Read())
+                applied.Add((Maybe(reader, 0), Maybe(reader, 1), Maybe(reader, 2), reader.GetString(3)));
+            return applied;
+        }
+    }
+
+    public void ForgetApplied(string database, DateTimeOffset until) =>
+        Run("DELETE FROM applied WHERE db = $db AND at <= $until", ("$db", database), ("$until", until.ToUnixTimeMilliseconds()));
+
+    /// <summary>
+    /// The objects whose script, as it was last seen, has a text in it: with how many times
+    /// and the first lines it is on.
+    /// </summary>
+    public List<(string Kind, string Schema, string Name, string Script)> Search(string database, string text, int limit)
+    {
+        lock (_gate)
+        {
+            using var command = Command("SELECT kind, schema, name, script FROM object WHERE db = $db AND script LIKE $pattern ESCAPE '\\' ORDER BY kind, schema, name LIMIT $limit",
+                ("$db", database), ("$pattern", "%" + text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%"), ("$limit", limit));
+            using var reader = command.ExecuteReader();
+            var found = new List<(string, string, string, string)>();
+            while (reader.Read())
+                found.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+            return found;
         }
     }
 

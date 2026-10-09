@@ -737,6 +737,40 @@ public sealed class ObjectWatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task A_change_a_package_brought_is_told_apart_from_one_done_straight_on_the_database()
+    {
+        await Look();
+        _history.NoteApplied("Sales", "Procedure", "dbo", "spcloseorders", "pkg-1", _clock.Now);
+        Touch("spCloseOrders", "CREATE spCloseOrders -- from the package");
+        var first = Assert.Single(await Look());
+        Assert.Equal("pkg-1", first.Package);
+        Assert.Equal("pkg-1", _history.Change(first.Id)!.Package);
+
+        // Looked at, the note is spent: the next change to the same object is nobody's package.
+        Touch("spCloseOrders", "CREATE spCloseOrders -- by hand");
+        Assert.Null(Assert.Single(await Look()).Package);
+
+        // A script names no object: what changed with it is taken to be its doing.
+        _history.NoteApplied("Sales", null, null, null, "pkg-2", _clock.Now);
+        Touch("Orders", "CREATE Orders -- with a new column");
+        Assert.Equal("pkg-2", Assert.Single(await Look()).Package);
+    }
+
+    [Fact]
+    public async Task The_scripts_are_searched_for_a_text()
+    {
+        _instance.Scripts["spCloseOrders"] = "CREATE PROCEDURE dbo.spCloseOrders AS\r\n  SELECT Total FROM dbo.Orders -- total of the day\r\n  UPDATE dbo.Orders SET TOTAL = 0";
+        _instance.Scripts["vwOrders"] = "CREATE VIEW dbo.vwOrders AS SELECT 100_percent FROM dbo.Orders";
+        await Look();
+
+        Assert.Equal(["spCloseOrders"], _history.Search("sales", "total", 50).Select(item => item.Name));
+        // The marks a search understands are only text here.
+        Assert.Equal(["vwOrders"], _history.Search("Sales", "100_percent", 50).Select(item => item.Name));
+        Assert.Empty(_history.Search("Sales", "100%percent", 50));
+        Assert.Empty(_history.Search("Other", "total", 50));
+    }
+
+    [Fact]
     public async Task A_first_look_that_was_cut_short_goes_on_without_calling_anything_a_change()
     {
         // Half of the database was recorded before the service stopped.
@@ -918,6 +952,13 @@ public class DatabaseAdminTests
         Assert.Equal("unknown-database", elsewhere!["Error"]!.Value<string>("Code"));
         Assert.Equal("invalid-request", (await rig.CommandAsync("DatabaseApply", request => request["Package"] = "p-1"))!["Error"]!.Value<string>("Code"));
         Assert.Equal(2, writer.Applied.Count);
+
+        // The scripts kept by the look at the objects can be searched.
+        var search = await rig.CommandAsync("DatabaseSearch", request => request["Text"] = "create vw");
+        Assert.True(search!.Value<bool>("Ready"));
+        var hit = Assert.Single(search["Objects"]!);
+        Assert.Equal(("vwOrders", 1, 1), (hit.Value<string>("Name"), hit.Value<int>("Matches"), hit["Lines"]![0]!.Value<int>("Number")));
+        Assert.Equal("invalid-request", (await rig.CommandAsync("DatabaseSearch", request => request["Text"] = "x"))!["Error"]!.Value<string>("Code"));
 
         var other = await rig.CommandAsync("DatabaseObjects", request => request["Database"] = "Payroll");
         Assert.Equal("unknown-database", other!["Error"]!.Value<string>("Code"));

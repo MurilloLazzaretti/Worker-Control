@@ -14,7 +14,7 @@ namespace WorkerControl.Service;
 /// second, records what happens and answers whoever administers the service. When the service
 /// stops, it stops the workers too.
 /// </summary>
-internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets, IDatabaseWriter databaseWriter, IWebServer webServer) : BackgroundService
+internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILoggerFactory loggers, TimeProvider time, IHostApplicationLifetime lifetime, IServiceManager services, IMachineNetwork network, IDatabaseSource databaseSource, ISecretProtector secrets, IDatabaseWriter databaseWriter, IWebServer webServer, IProxyTool proxyTool) : BackgroundService
 {
     /// <summary>
     /// A file of this name in the data folder when the service stops means: leave the workers
@@ -45,6 +45,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private TrafficCollector? _traffic;
     private DatabaseMonitor? _database;
     private TransportWork? _transport;
+    private ProxyWork? _proxy;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -94,6 +95,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         var targets = new TargetCatalog(() => _config, services, network, () => _frontends?.Snapshot().Apps ?? []);
         _transport = new TransportWork(targets, new Deployer(new GroupSwitch(this), services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport")),
             () => _config, transportDirectory, time);
+        _proxy = new ProxyWork(() => _config, services, proxyTool, transportDirectory, time);
         try
         {
             _transport.PrepareInbox();
@@ -492,6 +494,40 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             case "TransportCapture":
                 return _transport!.Capture(request.Value<string>("Kind"), request.Value<string>("Name"), request.Value<bool?>("Incoming") == true);
 
+            case "Proxy":
+                return _proxy!.Describe();
+
+            case "ProxyFile":
+                return _proxy!.Read(request.Value<string>("Path"));
+
+            case "ProxyTest":
+                return _proxy!.Test();
+
+            case "SetProxyFile":
+            {
+                var path = request.Value<string>("Path");
+                var answer = _proxy!.Write(path, request.Value<string>("Content"), request.Value<string>("Sha256"));
+                if (answer.Value<bool>("Ok"))
+                    Record(EventKind.ManualAction, $"file {path} of the proxy {(answer.Value<bool>("Saved") ? "changed" : "not changed, the proxy refused the configuration")}" + by);
+                return answer;
+            }
+
+            case "ProxyReload":
+            {
+                var answer = _proxy!.Reload();
+                if (answer.Value<bool>("Ok"))
+                    Record(EventKind.ManualAction, (answer.Value<bool>("Reloaded") ? "the proxy read its configuration again" : "the proxy was not asked to read a configuration that is not good") + by);
+                return answer;
+            }
+
+            case "ProxyRestart":
+            {
+                var answer = _proxy!.RestartAsync(lifetime.ApplicationStopping).GetAwaiter().GetResult();
+                if (answer.Value<bool>("Ok"))
+                    Record(EventKind.ManualAction, (answer.Value<bool>("Restarted") ? "the service of the proxy was restarted" : "the service of the proxy was not restarted") + by);
+                return answer;
+            }
+
             case "TransportSettings":
                 return _transport!.Settings();
 
@@ -558,6 +594,22 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 catch (Exception error) when (error is System.Data.Common.DbException or InvalidOperationException or TimeoutException)
                 {
                     return Admin.Error("database-failed", error.Message);
+                }
+            }
+
+            case "DatabaseSearch":
+            {
+                var wanted = request.Value<string>("Text")?.Trim() ?? "";
+                if (wanted.Length < 2)
+                    return Admin.Error("invalid-request", "\"Text\" needs at least two characters");
+                try
+                {
+                    var (database, ready, found) = _database!.Search(request.Value<string>("Database") is { Length: > 0 } named ? named : null, wanted, request.Value<int?>("Limit") ?? 200);
+                    return DatabaseAnswers.Found(database, ready, wanted, found);
+                }
+                catch (DatabaseMonitor.Refused refused)
+                {
+                    return Admin.Error(refused.Code, refused.Message);
                 }
             }
 

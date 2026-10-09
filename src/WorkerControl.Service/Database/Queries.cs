@@ -272,7 +272,17 @@ internal static class Queries
                CASE WHEN d.referenced_class = 6 THEN CASE WHEN t.is_table_type = 1 THEN 'TT' ELSE 'T' END ELSE RTRIM(o.type) END,
                d.referenced_database_name
         FROM sys.sql_expression_dependencies d
-        LEFT JOIN sys.objects o ON o.object_id = d.referenced_id AND d.referenced_class = 1
+        OUTER APPLY (
+            -- A procedure called by its name alone is only looked for when it runs, so the
+            -- instance does not say which object it is: it is found by the name, in the schema
+            -- of whoever calls it first and then in the one everything is in by default.
+            SELECT TOP (1) f.object_id, f.schema_id, f.type
+            FROM sys.objects f
+            WHERE d.referenced_class = 1
+              AND ((d.referenced_id IS NOT NULL AND f.object_id = d.referenced_id)
+                   OR (d.referenced_id IS NULL AND d.referenced_database_name IS NULL AND f.name = d.referenced_entity_name AND f.is_ms_shipped = 0
+                       AND f.schema_id = ISNULL(SCHEMA_ID(d.referenced_schema_name), f.schema_id)))
+            ORDER BY CASE WHEN f.object_id = d.referenced_id THEN 0 WHEN f.schema_id = OBJECTPROPERTY(@id, 'SchemaId') THEN 1 WHEN f.schema_id = SCHEMA_ID(N'dbo') THEN 2 ELSE 3 END) o
         LEFT JOIN sys.types t ON t.user_type_id = d.referenced_id AND d.referenced_class = 6
         WHERE d.referencing_id = @id AND d.referenced_entity_name IS NOT NULL
         """;
@@ -281,7 +291,11 @@ internal static class Queries
         SELECT DISTINCT SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type), CAST(NULL AS nvarchar(128))
         FROM sys.sql_expression_dependencies d
         JOIN sys.objects o ON o.object_id = d.referencing_id
-        WHERE d.referenced_id = @id AND d.referenced_class = 1 AND o.is_ms_shipped = 0
+        WHERE d.referenced_class = 1 AND o.is_ms_shipped = 0 AND o.object_id <> @id
+          AND (d.referenced_id = @id
+               -- Called by the name alone, the instance keeps only the name.
+               OR (d.referenced_id IS NULL AND d.referenced_database_name IS NULL AND d.referenced_entity_name = OBJECT_NAME(@id)
+                   AND ISNULL(d.referenced_schema_name, OBJECT_SCHEMA_NAME(@id)) = OBJECT_SCHEMA_NAME(@id)))
         """;
 
     /// <summary>

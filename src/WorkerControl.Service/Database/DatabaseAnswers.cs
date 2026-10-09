@@ -110,4 +110,16 @@ internal static class DatabaseAnswers
         answer["Line"] = result.Line;
         answer["Messages"] = new JArray(result.Messages);
     });
+
+    public static JObject Found(string database, bool ready, string text, List<(string Kind, string Schema, string Name, int Matches, List<(int Number, string Text)> Lines)> found) => Admin.Ok(answer =>
+    {
+        answer["Database"] = database;
+        answer["Text"] = text;
+        answer["Ready"] = ready;
+        answer["Objects"] = new JArray(found.Select(item => new JObject
+        {
+            ["Kind"] = item.Kind, ["Schema"] = item.Schema, ["Name"] = item.Name, ["Matches"] = item.Matches,
+            ["Lines"] = new JArray(item.Lines.Select(line => new JObject { ["Number"] = line.Number, ["Text"] = line.Text }))
+        }));
+    });
 }

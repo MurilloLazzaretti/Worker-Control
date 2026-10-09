@@ -368,7 +368,11 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             request.Item, request.Package, name, request.Action, request.Kind, request.Schema, request.Name);
         var result = await writer.ApplyAsync(connection, name, request, _stopping.Token);
         if (result.Ok)
+        {
             logger.LogInformation("Item {Item} of package {Package} applied to {Database}: {Did}", request.Item, request.Package, name, result.Did);
+            // So that the change, when it is noticed, is known to have come in a package.
+            objects?.NoteApplied(name, request.Action == "Script" ? null : request.Kind, request.Schema, request.Name, request.Package, time.GetUtcNow());
+        }
         else
             logger.LogWarning("Item {Item} of package {Package} was not applied to {Database}: {Error}", request.Item, request.Package, name, result.Error);
         lock (_gate)
@@ -377,6 +381,39 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
             _nextScan = DateTimeOffset.MinValue;
         }
         return (name, result);
+    }
+
+    /// <summary>
+    /// The objects of a database whose script has a text in it, from the scripts as they were
+    /// last seen. Each comes with how many times the text is there and the first lines it is on.
+    /// </summary>
+    public (string Database, bool Ready, List<(string Kind, string Schema, string Name, int Matches, List<(int Number, string Text)> Lines)> Found) Search(string? database, string text, int limit)
+    {
+        var (_, _, name) = Target(database);
+        if (objects is null)
+            throw new Refused("history-unavailable", "The scripts of the objects are not being kept on this machine");
+        var found = new List<(string, string, string, int, List<(int, string)>)>();
+        foreach (var (kind, schema, objectName, script) in objects.Search(name, text, Math.Clamp(limit, 1, 500)))
+        {
+            var lines = new List<(int, string)>();
+            var matches = 0;
+            var number = 0;
+            foreach (var line in script.Replace("\r\n", "\n").Split('\n'))
+            {
+                number++;
+                var at = line.IndexOf(text, StringComparison.OrdinalIgnoreCase);
+                if (at < 0)
+                    continue;
+                for (; at >= 0; at = line.IndexOf(text, at + text.Length, StringComparison.OrdinalIgnoreCase))
+                    matches++;
+                if (lines.Count < 3)
+                    lines.Add((number, line.Trim().Length > 240 ? line.Trim()[..240] + "…" : line.Trim()));
+            }
+            if (matches > 0)
+                found.Add((kind, schema, objectName, matches, lines));
+        }
+        // Until the first look at the database ends there are no scripts to search in.
+        return (name, objects.BaselineAt(name) is not null, found);
     }
 
     // ---------------------------------------------------------------- objects

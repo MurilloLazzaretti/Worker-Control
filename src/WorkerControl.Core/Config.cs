@@ -61,6 +61,33 @@ public sealed record WorkerControlConfig
     /// How what a package of changes brings is put in place on this machine.
     /// </summary>
     public TransportConfig Transport { get; init; } = new();
+
+    /// <summary>
+    /// The reverse proxy in front of the applications, when its configuration is to be seen
+    /// and changed from the panel. Null works it out from where its access log is.
+    /// </summary>
+    public ProxyConfig? Proxy { get; init; }
+}
+
+/// <summary>
+/// Where the reverse proxy (NGINX) is on this machine.
+/// </summary>
+public sealed record ProxyConfig
+{
+    /// <summary>
+    /// Its main configuration file.
+    /// </summary>
+    public string? Config { get; init; }
+
+    /// <summary>
+    /// Its executable, which is asked to test the configuration and to read it again.
+    /// </summary>
+    public string? Executable { get; init; }
+
+    /// <summary>
+    /// The Windows service it runs as.
+    /// </summary>
+    public string? Service { get; init; }
 }
 
 /// <summary>
@@ -498,7 +525,8 @@ public static class ConfigReader
                 Frontends = ReadFrontends(root),
                 Traffic = ReadTraffic(root),
                 Database = ReadDatabase(root),
-                Transport = ReadTransport(root)
+                Transport = ReadTransport(root),
+                Proxy = ReadProxy(root)
             };
             return config;
         }
@@ -630,6 +658,17 @@ public static class ConfigReader
             Routes = Texts("Routes"),
             Ignore = Texts("Ignore")
         };
+    }
+
+    private static ProxyConfig? ReadProxy(JsonElement root)
+    {
+        if (!root.TryGetProperty("Proxy", out var proxy) || proxy.ValueKind == JsonValueKind.Null)
+            return null;
+        if (proxy.ValueKind != JsonValueKind.Object)
+            throw new ConfigException("\"Proxy\" must be an object");
+        const string where = "\"Proxy\"";
+        string? Said(string name) => Text(proxy, name, where) is { Length: > 0 } value ? value.Trim() : null;
+        return new ProxyConfig { Config = Said("Config"), Executable = Said("Executable"), Service = Said("Service") };
     }
 
     private static TransportConfig ReadTransport(JsonElement root)
