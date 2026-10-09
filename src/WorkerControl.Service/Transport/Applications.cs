@@ -79,6 +79,9 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
             answer["Allowed"] = now?.Transport.AllowCreate ?? true;
             answer["Folders"] = new JObject(Kinds.Select(kind => new JProperty(kind, BaseOf(kind, targets))));
             answer["SiteName"] = SiteName(targets);
+            // Whether the instances of an application share one folder here, or each has its own.
+            var several = targets.Where(target => target.Kind == "api" && target.Sites.Count > 1).ToList();
+            answer["SharedFolder"] = several.Count > 0 && several.Count(target => target.Paths.Count == 1) * 2 >= several.Count;
             answer["Sites"] = new JArray(network.Sites().OrderBy(site => site.Port).Select(site => new JObject { ["Name"] = site.Name, ["Port"] = site.Port, ["Path"] = site.PhysicalPath }));
             answer["Groups"] = new JArray((now?.Groups ?? []).Select(group => new JObject { ["Name"] = group.Name, ["Path"] = group.ApplicationFullPath, ["Workers"] = group.TotalWorkers }));
             answer["Services"] = new JArray(targets.Where(target => target.Kind == "service").Select(target => services.Find(target.Name)).OfType<InstalledService>()
@@ -90,7 +93,13 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
     public sealed record ConfigText(string Path, string Content);
 
     public sealed record NewApplication(string Kind, string Name, string Folder, string Zip, string? Executable, int Instances, int Port, string? SiteName, string? DisplayName, string? StartType,
-        IReadOnlyList<ConfigText> Configs);
+        IReadOnlyList<ConfigText> Configs)
+    {
+        /// <summary>
+        /// For an application of the web server: every instance serves the same folder, instead of one folder each.
+        /// </summary>
+        public bool Shared { get; init; }
+    }
 
     private sealed class Refused(string message) : Exception(message);
 
@@ -306,17 +315,17 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
                 case "api":
                 {
                     var template = wanted.SiteName is { Length: > 0 } said ? said : DefaultSiteName;
-                    for (var number = 1; number <= wanted.Instances; number++)
+                    string FolderOf(int number) => wanted.Shared ? wanted.Folder : Path.Combine(wanted.Folder, number.ToString());
+                    for (var number = 1; number <= (wanted.Shared ? 1 : wanted.Instances); number++)
                     {
-                        var folder = Path.Combine(wanted.Folder, number.ToString());
-                        Place(wanted, folder);
-                        Did($"put the files in {folder}");
+                        Place(wanted, FolderOf(number));
+                        Did($"put the files in {FolderOf(number)}");
                     }
                     for (var number = 1; number <= wanted.Instances; number++)
                     {
                         var site = SiteOf(template, wanted.Name, number);
                         var port = wanted.Port + number - 1;
-                        web.CreateSite(site, port, Path.Combine(wanted.Folder, number.ToString()));
+                        web.CreateSite(site, port, FolderOf(number));
                         Did($"created the site {site} on the port {port}, with a pool of its own", () => web.DeleteSite(site), "the site " + site);
                     }
                     break;

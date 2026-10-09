@@ -559,7 +559,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     .Select(item => new ApplicationWork.ConfigText(item.Value<string>("Path") ?? "", item.Value<string>("Content") ?? "")).ToList();
                 var answer = _applications!.Create(new ApplicationWork.NewApplication(kind, name, request.Value<string>("Folder")?.Trim() ?? "", request.Value<string>("File") ?? "",
                     request.Value<string>("Executable")?.Trim(), request.Value<int?>("Instances") ?? 1, request.Value<int?>("Port") ?? 0, request.Value<string>("SiteName")?.Trim(),
-                    request.Value<string>("DisplayName"), request.Value<string>("StartType"), configs), lifetime.ApplicationStopping);
+                    request.Value<string>("DisplayName"), request.Value<string>("StartType"), configs) { Shared = request.Value<bool?>("SharedFolder") == true }, lifetime.ApplicationStopping);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Created") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"new {kind} {name} {(answer.Value<bool>("Created") ? "created in " + request.Value<string>("Folder") : "not created, " + answer.Value<string>("Problem"))}" + by);

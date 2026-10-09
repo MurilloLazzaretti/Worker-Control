@@ -141,6 +141,26 @@ public sealed class ApplicationTests : IDisposable
     }
 
     [Fact]
+    public void The_instances_of_an_application_may_share_one_folder_as_the_ones_there_are_do()
+    {
+        var wanted = New("api", "Orders") with { Shared = true };
+
+        var created = _work.Create(wanted, CancellationToken.None);
+
+        Assert.True((bool)created["Created"]!, (string?)created["Problem"]);
+        Assert.Equal([wanted.Folder, wanted.Folder], _machine.WebSites.Select(site => site.PhysicalPath));
+        Assert.Equal("v1", File.ReadAllText(Path.Combine(wanted.Folder, "App.exe")));
+        Assert.False(Directory.Exists(Path.Combine(wanted.Folder, "1")));
+        // Most of what is there shares a folder: the next one is offered the same.
+        Assert.True((bool)_work.Defaults()["SharedFolder"]!);
+
+        var removed = _work.Remove("api", "Orders", false, CancellationToken.None);
+        Assert.True((bool)removed["Removed"]!, (string?)removed["Problem"]);
+        Assert.Empty(_machine.WebSites);
+        Assert.False(Directory.Exists(wanted.Folder));
+    }
+
+    [Fact]
     public void What_was_made_by_a_creation_that_fails_half_way_is_taken_away()
     {
         _machine.SiteThatFails = "Shop Api Orders 2";
