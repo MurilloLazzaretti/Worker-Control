@@ -406,14 +406,14 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     /// <summary>
     /// Puts back what a package replaced, from the copy that was kept then.
     /// </summary>
-    public JObject Revert(string? kind, string? name, string? copy, string package, int item, CancellationToken stopping)
+    public JObject Revert(string? kind, string? name, string? copy, string package, int item, bool force, CancellationToken stopping)
     {
         if (catalog.Find(kind, name) is not { } target)
             return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
         if (string.IsNullOrEmpty(copy))
             return Admin.Error("invalid-request", "\"Backup\" is required");
 
-        var result = deployer.RevertAsync(target, copy, package, item, stopping).GetAwaiter().GetResult();
+        var result = deployer.RevertAsync(target, copy, package, item, stopping, force).GetAwaiter().GetResult();
         return Admin.Ok(answer =>
         {
             answer["Applied"] = result.Ok;
@@ -424,14 +424,14 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         });
     }
 
-    public JObject Deploy(string? kind, string? name, string? file, string package, int item, CancellationToken stopping)
+    public JObject Deploy(string? kind, string? name, string? file, string package, int item, bool force, CancellationToken stopping)
     {
         if (catalog.Find(kind, name) is not { } target)
             return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
         if (string.IsNullOrEmpty(file) || !File.Exists(file))
             return Admin.Error("invalid-request", "The files of the item are not where they were said to be");
 
-        var result = deployer.DeployAsync(target, file, package, item, config()?.Transport.KeepVersions ?? 3, stopping).GetAwaiter().GetResult();
+        var result = deployer.DeployAsync(target, file, package, item, config()?.Transport.KeepVersions ?? 3, stopping, force).GetAwaiter().GetResult();
         return Admin.Ok(answer =>
         {
             answer["Applied"] = result.Ok;

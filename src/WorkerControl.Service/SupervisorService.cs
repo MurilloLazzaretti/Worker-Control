@@ -93,7 +93,10 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
         var transportDirectory = Path.GetFullPath(config.Transport.Directory, _directory);
         var targets = new TargetCatalog(() => _config, services, network, () => _frontends?.Snapshot().Apps ?? []);
-        _transport = new TransportWork(targets, new Deployer(new GroupSwitch(this), services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport")),
+        _transport = new TransportWork(targets, new Deployer(new GroupSwitch(this), services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport"))
+            {
+                StopPatience = TimeSpan.FromSeconds(config.Transport.StopSeconds)
+            },
             () => _config, transportDirectory, time);
         _proxy = new ProxyWork(() => _config, services, proxyTool, transportDirectory, time);
         try
@@ -534,7 +537,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     return Admin.Error("invalid-request", "\"Package\" and \"Item\" are required");
                 var kind = request.Value<string>("Kind");
                 var name = request.Value<string>("Name");
-                var answer = _transport!.Revert(kind, name, request.Value<string>("Backup"), package, item, lifetime.ApplicationStopping);
+                var answer = _transport!.Revert(kind, name, request.Value<string>("Backup"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "put back as it was" : "not put back, " + answer.Value<string>("Problem"))}" + by);
@@ -579,7 +582,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     return Admin.Error("invalid-request", "\"Package\" and \"Item\" are required");
                 var kind = request.Value<string>("Kind");
                 var name = request.Value<string>("Name");
-                var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, lifetime.ApplicationStopping);
+                var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "replaced" : "not replaced, " + answer.Value<string>("Problem"))}" + by);
@@ -840,6 +843,9 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             Interlocked.Exchange(ref service._reloadRequested, 1);
             return true;
         }
+
+        public IReadOnlyList<int> ProcessIds(string group) =>
+            [.. service._supervisor?.GetStatus().FirstOrDefault(item => item.Config.Name == group)?.Workers.Select(worker => worker.ProcessId).Where(id => id > 0) ?? []];
 
         public (bool Enabled, int Processes, int Up, int Desired)? Look(string group)
         {

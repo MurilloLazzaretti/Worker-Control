@@ -18,6 +18,43 @@ public interface IGroupSwitch
     /// are up, and how many it is supposed to have. Null when there is no such group.
     /// </summary>
     (bool Enabled, int Processes, int Up, int Desired)? Look(string group);
+
+    /// <summary>
+    /// The processes the group still has.
+    /// </summary>
+    IReadOnlyList<int> ProcessIds(string group);
+}
+
+/// <summary>
+/// Ending a process that was asked to stop and did not.
+/// </summary>
+public interface IProcessEnder
+{
+    /// <summary>
+    /// False when it could not be ended. One that is not there any more is ended.
+    /// </summary>
+    bool End(int processId);
+}
+
+internal sealed class ProcessEnder : IProcessEnder
+{
+    public bool End(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.Kill(entireProcessTree: true);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>
@@ -28,6 +65,11 @@ public interface IWebServer
     void Stop(IReadOnlyList<string> sites);
 
     void Start(IReadOnlyList<string> sites);
+
+    /// <summary>
+    /// The processes still serving the sites.
+    /// </summary>
+    IReadOnlyList<int> ProcessIds(IReadOnlyList<string> sites);
 }
 
 /// <summary>
@@ -46,7 +88,13 @@ public sealed class DeployFailed(string message) : Exception(message);
 /// </summary>
 internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IWebServer web, TimeProvider time, string directory, ILogger logger)
 {
-    public TimeSpan StopPatience { get; init; } = TimeSpan.FromMinutes(3);
+    public TimeSpan StopPatience { get; init; } = TimeSpan.FromSeconds(TransportConfig.DefaultStopSeconds);
+
+    /// <summary>
+    /// For how long what was ended by force is waited for to be gone.
+    /// </summary>
+    public TimeSpan EndPatience { get; init; } = TimeSpan.FromSeconds(30);
+    public IProcessEnder Ender { get; init; } = new ProcessEnder();
     public TimeSpan StartPatience { get; init; } = TimeSpan.FromMinutes(3);
     public TimeSpan Poll { get; init; } = TimeSpan.FromMilliseconds(500);
 
@@ -54,7 +102,7 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
 
     private string BackupRoot(DeployTarget target) => Path.Combine(directory, "backup", target.Kind, Safe(target.Name));
 
-    public async Task<DeployResult> DeployAsync(DeployTarget target, string zipPath, string package, int item, int keepVersions, CancellationToken stopping)
+    public async Task<DeployResult> DeployAsync(DeployTarget target, string zipPath, string package, int item, int keepVersions, CancellationToken stopping, bool force = false)
     {
         var steps = new List<string>();
         void Did(string step)
@@ -89,7 +137,7 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
         MirrorResult? files = null;
         try
         {
-            wereOn = await Stop(target, Did, stopping);
+            wereOn = await Stop(target, Did, force, stopping);
 
             for (var index = 0; index < target.Paths.Count; index++)
             {
@@ -145,7 +193,7 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     /// runs from the folder is stopped and started, a copy of what is there now is kept first,
     /// and the configuration of the environment is left as it is.
     /// </summary>
-    public async Task<DeployResult> RevertAsync(DeployTarget target, string copy, string package, int item, CancellationToken stopping)
+    public async Task<DeployResult> RevertAsync(DeployTarget target, string copy, string package, int item, CancellationToken stopping, bool force = false)
     {
         var steps = new List<string>();
         void Did(string step)
@@ -170,7 +218,7 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
         MirrorResult? files = null;
         try
         {
-            wereOn = await Stop(target, Did, stopping);
+            wereOn = await Stop(target, Did, force, stopping);
             for (var index = 0; index < target.Paths.Count; index++)
             {
                 FileSet.Copy(target.Paths[index], Path.Combine(before, index.ToString()));
@@ -231,7 +279,7 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     public async Task<IReadOnlyList<string>> RestartAsync(DeployTarget target, CancellationToken stopping)
     {
         var steps = new List<string>();
-        var wereOn = await Stop(target, steps.Add, stopping);
+        var wereOn = await Stop(target, steps.Add, false, stopping);
         await Start(target, wereOn, steps.Add, stopping);
         return steps;
     }
@@ -239,7 +287,33 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     /// <summary>
     /// Stops whatever runs from the folder. Gives the groups that were on, to turn those on again and no other.
     /// </summary>
-    private async Task<IReadOnlyList<string>> Stop(DeployTarget target, Action<string> did, CancellationToken stopping)
+    /// <summary>
+    /// Waits for what was asked to stop. What is still there when the time is over is ended by
+    /// force, when that was asked for; otherwise it is left as it is and said.
+    /// </summary>
+    private async Task Stopped(Func<bool> stopped, Func<IReadOnlyList<int>> left, bool force, string problem, Action<string> did, CancellationToken stopping)
+    {
+        try
+        {
+            await Until(stopped, StopPatience, problem, stopping);
+            return;
+        }
+        catch (DeployFailed)
+        {
+            var ids = left();
+            var which = ids.Count == 0 ? "" : $" (process {string.Join(", ", ids)} is still there)";
+            if (!force)
+                throw new DeployFailed($"{problem}{which}. Nothing was changed. It can be asked again with what does not stop being ended by force");
+            if (ids.Count == 0)
+                throw new DeployFailed(problem + ", and no process of it was found to be ended by force");
+            if (ids.Where(id => !Ender.End(id)).ToList() is { Count: > 0 } refused)
+                throw new DeployFailed($"{problem}, and process {string.Join(", ", refused)} could not be ended by force");
+            did($"ended by force what did not stop: process {string.Join(", ", ids)}");
+            await Until(stopped, EndPatience, problem + ", not even ended by force", stopping);
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> Stop(DeployTarget target, Action<string> did, bool force, CancellationToken stopping)
     {
         switch (target.Kind)
         {
@@ -250,7 +324,8 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
                     groups.Enable(group, false, "a package is replacing its program");
                 try
                 {
-                    await Until(() => target.Groups.All(group => groups.Look(group) is null or { Processes: 0 }), StopPatience, "The processes of the group did not stop in time", stopping);
+                    await Stopped(() => target.Groups.All(group => groups.Look(group) is null or { Processes: 0 }), () => [.. target.Groups.SelectMany(groups.ProcessIds)],
+                        force, "The processes of the group did not stop in time", did, stopping);
                 }
                 catch (DeployFailed)
                 {
@@ -272,13 +347,16 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
                 }
                 try
                 {
-                    services.Stop(target.Service!);
+                    // One that is already stopping was asked before, and is only waited for.
+                    if (service.State != ServiceState.Stopping)
+                        services.Stop(target.Service!);
                 }
                 catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
                 {
                     throw new DeployFailed("The service refused to stop: " + error.Message);
                 }
-                await Until(() => services.Find(target.Service!) is null or { State: ServiceState.Stopped }, StopPatience, "The service did not stop in time", stopping);
+                await Stopped(() => services.Find(target.Service!) is null or { State: ServiceState.Stopped }, () => services.Find(target.Service!) is { ProcessId: > 0 } stuck ? [stuck.ProcessId] : [],
+                    force, "The service did not stop in time", did, stopping);
                 did($"stopped the service {target.Service}");
                 return [target.Service!];
             }
@@ -300,6 +378,33 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
                     {
                     }
                     throw new DeployFailed("The web server did not take the application off the air: " + error.Message);
+                }
+                // Off the air is not yet gone: the files are only let go when the processes that served it end.
+                IReadOnlyList<int> Serving()
+                {
+                    try
+                    {
+                        return web.ProcessIds(target.Sites);
+                    }
+                    catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+                    {
+                        return [];
+                    }
+                }
+                try
+                {
+                    await Stopped(() => Serving().Count == 0, Serving, force, "The processes of the application did not end in time", did, stopping);
+                }
+                catch (DeployFailed)
+                {
+                    try
+                    {
+                        web.Start(target.Sites);
+                    }
+                    catch (Exception again) when (again is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+                    {
+                    }
+                    throw;
                 }
                 did($"took {string.Join(", ", target.Sites)} off the air");
                 return target.Sites;
@@ -389,6 +494,18 @@ internal sealed class IisWebServer : IWebServer
             Run("start", "site", site, alreadyDone: "already started");
     }
 
+    public IReadOnlyList<int> ProcessIds(IReadOnlyList<string> sites)
+    {
+        var ids = new List<int>();
+        foreach (var pool in Pools(sites))
+        {
+            var (code, output) = Execute($"list wp /apppool.name:\"{pool}\" /text:WP.NAME");
+            if (code == 0)
+                ids.AddRange(output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(line => int.TryParse(line, out var id) ? id : 0).Where(id => id > 0));
+        }
+        return ids;
+    }
+
     private static List<string> Pools(IReadOnlyList<string> sites)
     {
         var pools = new List<string>();
@@ -430,4 +547,6 @@ internal sealed class NoWebServer : IWebServer
     public void Stop(IReadOnlyList<string> sites) => throw new InvalidOperationException("There is no web server to command on this system");
 
     public void Start(IReadOnlyList<string> sites) => throw new InvalidOperationException("There is no web server to command on this system");
+
+    public IReadOnlyList<int> ProcessIds(IReadOnlyList<string> sites) => [];
 }

@@ -120,8 +120,37 @@ public sealed class FileSetTests : IDisposable
 /// <summary>
 /// A machine whose groups, services and sites are whatever the test says.
 /// </summary>
-internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer, IMachineNetwork
+internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer, IMachineNetwork, IProcessEnder
 {
+    /// <summary>
+    /// What is still running of each thing that did not stop, and what was ended by force.
+    /// </summary>
+    public List<int> Stuck { get; } = [];
+    public List<int> Ended { get; } = [];
+    public bool CannotBeEnded { get; set; }
+
+    public bool End(int processId)
+    {
+        Ended.Add(processId);
+        if (CannotBeEnded)
+            return false;
+        Stuck.Remove(processId);
+        if (Stuck.Count == 0)
+        {
+            foreach (var name in Services.Keys.ToList())
+                if (Services[name].State == ServiceState.Stopping)
+                    Services[name] = Services[name] with { State = ServiceState.Stopped, ProcessId = 0 };
+            foreach (var name in Groups.Keys.ToList())
+                if (!Groups[name].Enabled)
+                    Groups[name] = Groups[name] with { Processes = 0 };
+        }
+        return true;
+    }
+
+    public IReadOnlyList<int> ProcessIds(string group) => [.. Stuck];
+
+    IReadOnlyList<int> IWebServer.ProcessIds(IReadOnlyList<string> sites) => [.. Stuck];
+
     public List<string> Did { get; } = [];
     public Dictionary<string, (bool Enabled, int Processes, int Up, int Desired)> Groups { get; } = [];
     public Dictionary<string, InstalledService> Services { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -157,8 +186,7 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
     void IServiceManager.Stop(string name)
     {
         Did.Add("stop " + name);
-        if (!NeverStops)
-            Services[name] = Services[name] with { State = ServiceState.Stopped, ProcessId = 0 };
+        Services[name] = NeverStops ? Services[name] with { State = ServiceState.Stopping } : Services[name] with { State = ServiceState.Stopped, ProcessId = 0 };
     }
 
     void IWebServer.Stop(IReadOnlyList<string> sites) => Did.Add("offline " + string.Join("+", sites));
@@ -184,7 +212,7 @@ public sealed class DeployerTests : IDisposable
     public DeployerTests() =>
         _deployer = new Deployer(_machine, _machine, _machine, TimeProvider.System, Path.Combine(_root, "transport"), NullLogger.Instance)
         {
-            StopPatience = TimeSpan.FromMilliseconds(300), StartPatience = TimeSpan.FromMilliseconds(300), Poll = TimeSpan.FromMilliseconds(20)
+            StopPatience = TimeSpan.FromMilliseconds(300), StartPatience = TimeSpan.FromMilliseconds(300), EndPatience = TimeSpan.FromMilliseconds(300), Poll = TimeSpan.FromMilliseconds(20), Ender = _machine
         };
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -363,6 +391,45 @@ public sealed class DeployerTests : IDisposable
 
         Assert.False(result.Ok);
         Assert.Contains("did not come up", result.Error);
+    }
+
+    [Fact]
+    public async Task What_does_not_stop_is_ended_by_force_only_when_that_was_asked_for()
+    {
+        var folder = Installed("stuck", "v1");
+        _machine.Services["Orders"] = new InstalledService("Orders", "Orders", Path.Combine(folder, "App.exe"), ServiceState.Running, "Automatic", 2568, 0);
+        _machine.NeverStops = true;
+        _machine.Stuck.Add(2568);
+        var service = new DeployTarget("service", "Orders", [folder], Keep) { Service = "Orders" };
+
+        var left = await _deployer.DeployAsync(service, Package(), "pkg-12345678", 1, 3, CancellationToken.None);
+        Assert.False(left.Ok);
+        Assert.Contains("process 2568 is still there", left.Error);
+        Assert.Empty(_machine.Ended);
+        Assert.Equal("v1", File.ReadAllText(Path.Combine(folder, "App.exe")));
+
+        var forced = await _deployer.DeployAsync(service, Package(), "pkg-12345678", 1, 3, CancellationToken.None, force: true);
+        Assert.True(forced.Ok, forced.Error);
+        Assert.Equal([2568], _machine.Ended);
+        Assert.Contains(forced.Steps, step => step.Contains("ended by force") && step.Contains("2568"));
+        Assert.Equal("v2", File.ReadAllText(Path.Combine(folder, "App.exe")));
+
+        // An application of the web server whose process lingers after it went off the air.
+        var site = Installed("site", "v1");
+        _machine.Stuck.Add(7001);
+        var api = new DeployTarget("api", "Orders", [site], Keep) { Sites = ["Orders 1"] };
+        var waiting = await _deployer.DeployAsync(api, Package(), "pkg-12345678", 2, 3, CancellationToken.None);
+        Assert.False(waiting.Ok);
+        Assert.Equal("online Orders 1", _machine.Did.Last());
+        Assert.True((await _deployer.DeployAsync(api, Package(), "pkg-12345678", 2, 3, CancellationToken.None, force: true)).Ok);
+        Assert.Equal([2568, 7001], _machine.Ended);
+
+        // One that cannot be ended leaves everything as it was.
+        _machine.Stuck.Add(7002);
+        _machine.CannotBeEnded = true;
+        var refused = await _deployer.DeployAsync(api, Package("v3"), "pkg-12345678", 3, 3, CancellationToken.None, force: true);
+        Assert.Contains("could not be ended by force", refused.Error);
+        Assert.Equal("v2", File.ReadAllText(Path.Combine(site, "App.exe")));
     }
 
     [Fact]

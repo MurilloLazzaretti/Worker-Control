@@ -120,6 +120,15 @@ public sealed record TransportConfig
     /// </summary>
     public int KeepVersions { get; init; } = 3;
 
+    public const int DefaultStopSeconds = 90;
+
+    /// <summary>
+    /// For how long what runs from a folder is waited for to stop before its files are replaced.
+    /// What is still there after that is left alone, or ended by force when the package was
+    /// applied asking for it.
+    /// </summary>
+    public int StopSeconds { get; init; } = DefaultStopSeconds;
+
     /// <summary>
     /// What belongs to the environment and is never taken into a package nor replaced by one:
     /// file names with wildcards, and folders written with a slash at the end.
@@ -714,6 +723,7 @@ public static class ConfigReader
             Inbox = Text(transport, "Inbox", where) is { Length: > 0 } inbox ? inbox.Trim() : "inbox",
             Inboxes = ReadInboxes(transport, where),
             KeepVersions = Integer(transport, "KeepVersions", where, defaultValue: 3, minimum: 0),
+            StopSeconds = Integer(transport, "StopSeconds", where, defaultValue: TransportConfig.DefaultStopSeconds, minimum: 5),
             Keep = Texts(transport, "Keep", where) ?? TransportConfig.DefaultKeep,
             Targets = targets
         };
