@@ -95,7 +95,7 @@ public sealed record ProxyConfig
 /// </summary>
 public sealed record TransportConfig
 {
-    public static readonly IReadOnlyList<string> DefaultKeep = ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.db", "*.db-wal", "*.db-shm", "logs/"];
+    public static readonly IReadOnlyList<string> DefaultKeep = ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.ini", "environment.js", "env.json", "*.db", "*.db-wal", "*.db-shm", "logs/"];
 
     /// <summary>
     /// Where the copies of what was replaced are kept, relative to the data folder unless it is a full path.

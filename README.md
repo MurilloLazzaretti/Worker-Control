@@ -318,7 +318,7 @@ cannot be, or is to be said otherwise, goes here.
 ```json
 "Transport": {
   "KeepVersions": 3,
-  "Keep": ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.db", "*.db-wal", "*.db-shm", "logs/"],
+  "Keep": ["appsettings*.json", "web.config", "ConfigWorkers.json", "*.ini", "environment.js", "env.json", "*.db", "*.db-wal", "*.db-shm", "logs/"],
   "Targets": [
     { "Kind": "service", "Name": "MyWrappedService", "Paths": ["D:\\Apps\\my-service"] },
     { "Kind": "api", "Name": "Orders", "Paths": ["D:\\www\\api\\Orders"], "Sites": ["Orders 1", "Orders 2"] }

@@ -116,7 +116,7 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
             foreach (var module in app.Modules)
             {
                 var folder = Path.GetDirectoryName(Path.Combine(app.Root, module.Entry.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar)));
-                targets.Add(new DeployTarget("frontend", apps.Count > 1 ? $"{app.Name}/{module.Name}" : module.Name, folder is null ? [] : [folder], [])
+                targets.Add(new DeployTarget("frontend", apps.Count > 1 ? $"{app.Name}/{module.Name}" : module.Name, folder is null ? [] : [folder], keep)
                 {
                     Version = module.Versions.FirstOrDefault()?.Version ?? (module.Build is { } build ? "build " + build : null)
                 });
