@@ -128,13 +128,15 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
     public List<WebSite> WebSites { get; } = [];
     public bool NeverStops { get; set; }
     public bool NeverStarts { get; set; }
-    public Action? WhileStopped { get; set; }
+    public bool SlowToEnable { get; set; }
 
     public bool Enable(string group, bool enabled, string why)
     {
         Did.Add($"{(enabled ? "enable" : "disable")} {group}");
         if (!Groups.TryGetValue(group, out var now))
             return false;
+        if (enabled && SlowToEnable)
+            return true;
         Groups[group] = enabled ? (true, NeverStarts ? 0 : now.Desired, NeverStarts ? 0 : now.Desired, now.Desired) : (false, NeverStops ? now.Processes : 0, 0, now.Desired);
         return true;
     }
@@ -320,6 +322,47 @@ public sealed class DeployerTests : IDisposable
 
         Assert.Empty(_machine.Did);
         Assert.Equal("v1", File.ReadAllText(Path.Combine(folder, "App.exe")));
+    }
+
+    [Fact]
+    public async Task What_a_package_replaced_is_put_back_from_the_copy_with_the_configuration_of_now()
+    {
+        var folder = Installed("orders", "v1");
+        File.WriteAllText(Path.Combine(folder, "Old.dll"), "old");
+        _machine.Services["Orders"] = new InstalledService("Orders", "Orders", Path.Combine(folder, "App.exe"), ServiceState.Running, "Automatic", 4242, 0);
+        var target = new DeployTarget("service", "Orders", [folder], Keep) { Service = "Orders" };
+        var applied = await Deploy(target, Package());
+        Assert.False(File.Exists(Path.Combine(folder, "Old.dll")));
+        // The configuration was changed after the package came in: that is of the environment and stays.
+        File.WriteAllText(Path.Combine(folder, "appsettings.json"), "{changed since}");
+        _machine.Did.Clear();
+
+        var back = await _deployer.RevertAsync(target, applied.Backup!, "pkg-12345678", 1, CancellationToken.None);
+
+        Assert.True(back.Ok, back.Error);
+        Assert.Equal(["stop Orders", "start Orders"], _machine.Did);
+        Assert.Equal(("v1", "old", "{changed since}"), (File.ReadAllText(Path.Combine(folder, "App.exe")), File.ReadAllText(Path.Combine(folder, "Old.dll")), File.ReadAllText(Path.Combine(folder, "appsettings.json"))));
+        Assert.False(File.Exists(Path.Combine(folder, "New.dll")));
+        // What was there before going back is kept too.
+        Assert.Equal("v2", File.ReadAllText(Path.Combine(back.Backup!, "0", "App.exe")));
+
+        // Only a copy made for this target, and one that is still there.
+        Assert.Contains("not a copy kept for this target", (await _deployer.RevertAsync(target, folder, "pkg-12345678", 1, CancellationToken.None)).Error);
+        Assert.Contains("not kept any more", (await _deployer.RevertAsync(target, applied.Backup! + "-gone", "pkg-12345678", 1, CancellationToken.None)).Error);
+    }
+
+    [Fact]
+    public async Task A_group_is_only_up_again_when_the_supervisor_has_turned_it_on()
+    {
+        var folder = Installed("worker", "v1");
+        _machine.Groups["Orders"] = (true, 2, 2, 2);
+        // Asked to be on, the supervisor still shows it off, as it does until it reads its file again: that is not up.
+        _machine.SlowToEnable = true;
+
+        var result = await Deploy(new DeployTarget("worker", "Orders", [folder], Keep) { Groups = ["Orders"] }, Package());
+
+        Assert.False(result.Ok);
+        Assert.Contains("did not come up", result.Error);
     }
 
     [Fact]

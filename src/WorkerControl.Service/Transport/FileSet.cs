@@ -198,6 +198,44 @@ internal static class FileSet
     }
 
     /// <summary>
+    /// Puts the files of a folder back as a copy of it has them, leaving alone what belongs to
+    /// the environment: the configuration stays as it is now, whatever the copy has of it.
+    /// </summary>
+    public static MirrorResult RestoreKeeping(string copy, string folder, IReadOnlyList<string> keep)
+    {
+        var root = Path.GetFullPath(folder);
+        Directory.CreateDirectory(root);
+        var wanted = List(copy, keep).ToDictionary(entry => entry.Path, StringComparer.OrdinalIgnoreCase);
+        var now = List(root, keep).ToDictionary(entry => entry.Path, StringComparer.OrdinalIgnoreCase);
+        int added = 0, changed = 0, removed = 0, unchanged = 0;
+
+        foreach (var (path, entry) in wanted)
+        {
+            if (now.TryGetValue(path, out var has) && has.Sha256 == entry.Sha256)
+            {
+                unchanged++;
+                continue;
+            }
+            var target = Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(Path.Combine(copy, path.Replace('/', Path.DirectorySeparatorChar)), target, overwrite: true);
+            if (has is null)
+                added++;
+            else
+                changed++;
+        }
+        foreach (var gone in now.Keys.Where(path => !wanted.ContainsKey(path)))
+        {
+            File.Delete(Path.Combine(root, gone.Replace('/', Path.DirectorySeparatorChar)));
+            removed++;
+        }
+        foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories).OrderByDescending(path => path.Length))
+            if (!Directory.EnumerateFileSystemEntries(directory).Any())
+                Directory.Delete(directory);
+        return new MirrorResult(added, changed, removed, unchanged);
+    }
+
+    /// <summary>
     /// Puts a folder back as a copy of it was: every file of the copy, and nothing else.
     /// </summary>
     public static void Restore(string copy, string folder)

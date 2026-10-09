@@ -403,6 +403,27 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         });
     }
 
+    /// <summary>
+    /// Puts back what a package replaced, from the copy that was kept then.
+    /// </summary>
+    public JObject Revert(string? kind, string? name, string? copy, string package, int item, CancellationToken stopping)
+    {
+        if (catalog.Find(kind, name) is not { } target)
+            return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
+        if (string.IsNullOrEmpty(copy))
+            return Admin.Error("invalid-request", "\"Backup\" is required");
+
+        var result = deployer.RevertAsync(target, copy, package, item, stopping).GetAwaiter().GetResult();
+        return Admin.Ok(answer =>
+        {
+            answer["Applied"] = result.Ok;
+            answer["Did"] = result.Ok ? "reverted" : null;
+            answer["Problem"] = result.Error;
+            answer["Backup"] = result.Backup;
+            answer["Messages"] = new JArray(result.Steps);
+        });
+    }
+
     public JObject Deploy(string? kind, string? name, string? file, string package, int item, CancellationToken stopping)
     {
         if (catalog.Find(kind, name) is not { } target)

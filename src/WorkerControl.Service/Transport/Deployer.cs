@@ -140,6 +140,67 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
         return new DeployResult(true, null, steps, files, backup, true);
     }
 
+    /// <summary>
+    /// Puts the files of a target back as a copy kept when a package replaced them. Whatever
+    /// runs from the folder is stopped and started, a copy of what is there now is kept first,
+    /// and the configuration of the environment is left as it is.
+    /// </summary>
+    public async Task<DeployResult> RevertAsync(DeployTarget target, string copy, string package, int item, CancellationToken stopping)
+    {
+        var steps = new List<string>();
+        void Did(string step)
+        {
+            steps.Add(step);
+            logger.LogInformation("Package {Package}, item {Item}, {Kind} {Name}, going back: {Step}", package, item, target.Kind, target.Name, step);
+        }
+
+        // Only a copy this service made for this target is ever put back.
+        var root = Path.GetFullPath(BackupRoot(target)) + Path.DirectorySeparatorChar;
+        if (!Path.GetFullPath(copy).StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            return new DeployResult(false, "This is not a copy kept for this target", steps, null, null, false);
+        if (!Directory.Exists(copy))
+            return new DeployResult(false, "The copy of how it was is not kept any more; only the latest ones are", steps, null, null, false);
+        if (target.Paths.Count == 0 || target.Paths.FirstOrDefault(path => !Directory.Exists(path)) is not null)
+            return new DeployResult(false, "The folder of this target is not on this machine", steps, null, null, false);
+        if (Enumerable.Range(0, target.Paths.Count).FirstOrDefault(index => !Directory.Exists(Path.Combine(copy, index.ToString())), -1) >= 0)
+            return new DeployResult(false, "The copy does not have every folder of this target", steps, null, null, false);
+
+        var before = Path.Combine(BackupRoot(target), $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Safe(package)[..Math.Min(8, package.Length)]}-back");
+        IReadOnlyList<string> wereOn = [];
+        MirrorResult? files = null;
+        try
+        {
+            wereOn = await Stop(target, Did, stopping);
+            for (var index = 0; index < target.Paths.Count; index++)
+            {
+                FileSet.Copy(target.Paths[index], Path.Combine(before, index.ToString()));
+                var result = FileSet.RestoreKeeping(Path.Combine(copy, index.ToString()), target.Paths[index], target.Keep);
+                files = files is null ? result : new MirrorResult(files.Added + result.Added, files.Changed + result.Changed, files.Removed + result.Removed, files.Unchanged + result.Unchanged);
+                Did($"put the files of {target.Paths[index]} back: {result.Added} returned, {result.Changed} changed, {result.Removed} removed");
+            }
+        }
+        catch (DeployFailed failed)
+        {
+            await StartQuietly(target, wereOn, Did, stopping);
+            return new DeployResult(false, failed.Message, steps, null, null, false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            await StartQuietly(target, wereOn, Did, stopping);
+            return new DeployResult(false, "The files could not all be put back: " + error.Message, steps, files, before, true);
+        }
+
+        try
+        {
+            await Start(target, wereOn, Did, stopping);
+        }
+        catch (DeployFailed failed)
+        {
+            return new DeployResult(false, "The files were put back, but it did not come up again: " + failed.Message, steps, files, before, true);
+        }
+        return new DeployResult(true, null, steps, files, before, true);
+    }
+
     private async Task StartQuietly(DeployTarget target, IReadOnlyList<string> wereOn, Action<string> did, CancellationToken stopping)
     {
         try
@@ -256,7 +317,8 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
             case "worker":
                 foreach (var group in wereOn)
                     groups.Enable(group, true, "a package replaced its program");
-                await Until(() => wereOn.All(group => groups.Look(group) is { Desired: 0 } or { Up: > 0 }), StartPatience, "The processes of the group did not come up in time", stopping);
+                // On, as the supervisor sees it, and with a process up: until it reads the file again the group still looks off.
+                await Until(() => wereOn.All(group => groups.Look(group) is { Enabled: true, Desired: 0 } or { Enabled: true, Up: > 0 }), StartPatience, "The processes of the group did not come up in time", stopping);
                 did($"started {string.Join(", ", wereOn)}");
                 break;
             case "service":

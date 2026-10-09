@@ -528,6 +528,19 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 return answer;
             }
 
+            case "TransportRevert":
+            {
+                if (request.Value<string>("Package") is not { Length: > 0 } package || request.Value<int?>("Item") is not { } item)
+                    return Admin.Error("invalid-request", "\"Package\" and \"Item\" are required");
+                var kind = request.Value<string>("Kind");
+                var name = request.Value<string>("Name");
+                var answer = _transport!.Revert(kind, name, request.Value<string>("Backup"), package, item, lifetime.ApplicationStopping);
+                if (answer.Value<bool>("Ok"))
+                    Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
+                        $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "put back as it was" : "not put back, " + answer.Value<string>("Problem"))}" + by);
+                return answer;
+            }
+
             case "TransportSettings":
                 return _transport!.Settings();
 
