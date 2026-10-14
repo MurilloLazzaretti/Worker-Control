@@ -9,7 +9,7 @@
 | 2.x (.NET) | this branch (`main`) | in development |
 | 1.x (Delphi) | branch [`delphi-v1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/delphi-v1), last tag [`v1.1.1`](https://github.com/MurilloLazzaretti/Worker-Control/tree/v1.1.1) | maintenance |
 
-Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). The service is done, with its history and its administration over ZapMQ, and is operated from the web panel of [ZapMQ](https://github.com/MurilloLazzaretti/ZapMQ) 2.2: groups and processes live, actions, configuration, history and the trace of each process. Management Studio 1.x keeps working against it.
+Version 2.x is a rewrite. It talks to the applications exactly as 1.x did and reads the same `ConfigWorkers.json`, so nothing changes in them. What it is meant to do, and in which order, is in [`docs/ESPECIFICACAO-2.0.md`](docs/ESPECIFICACAO-2.0.md) (in Portuguese). The service is done, with its history and its administration over ZapMQ, and is operated from the web panel of [ZapMQ](https://github.com/MurilloLazzaretti/ZapMQ) 2.x: groups and processes live, actions, configuration, history and the trace of each process. Management Studio 1.x keeps working against it.
 
 ## 🧬 Resources
 
@@ -93,9 +93,9 @@ The folder `publish/win-x64` now has the two files the service needs:
 
 ## ⚡️ Configuration
 
-The configuration is in two files in the data folder. `ConfigWorkers.json` is of the supervisor: where the broker is, the groups and the Windows services it looks after. `Environment.json` is of the environment: `Database`, `Transport`, `Traffic`, `Frontends` and `Proxy`. Any of those sections found in `ConfigWorkers.json` (left by an older version, or written there by hand) is moved to `Environment.json` the next time the configuration is read, the previous version of each file kept as `.bak`. Both are read as one; the sections below are shown as they are written, in whichever file they go.
+The configuration is in two files in the data folder. `ConfigWorkers.json` is of the supervisor: where the broker is, the groups and the Windows services it looks after. `Environment.json` is of the environment: `Database`, `Transport`, `Traffic`, `Frontends`, `Downloads` and `Proxy`. Any of those sections found in `ConfigWorkers.json` (left by an older version, or written there by hand) is moved to `Environment.json` the next time the configuration is read, the previous version of each file kept as `.bak`. Both are read as one; the sections below are shown as they are written, in whichever file they go.
 
-The settings are in `ConfigWorkers.json`, in the same folder as `WorkerControl.exe`. A sample is in the repository root.
+The data folder is the folder of `WorkerControl.exe`, unless `WorkerControl:DataDirectory` says otherwise. A `ConfigWorkers.json` with one group:
 
 ```json
 {
@@ -398,6 +398,8 @@ Start-Service WorkerControlService
 Leave `depend= ZapMQ` out when ZapMQ runs on another machine, and replace `ZapMQ` with the name its service has on yours.
 
 The service runs under the Local System account, and so does every application it starts. The names above are the ones 1.x used, which Management Studio 1.x looks for.
+
+When 1.x is installed on the machine, take it out with `sc.exe delete` and by deleting its folder, never with its uninstaller (`unins000.exe`): the service has the same name in both versions, and the uninstaller of 1.x stops and deletes the service of 2.x.
 
 3. Check that it is running:
 
