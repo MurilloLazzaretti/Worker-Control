@@ -15,7 +15,7 @@ namespace WorkerControl.Service.Transport;
 internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer deployer, IGroupSwitch groups, IServiceManager services, IWebServer web, IMachineNetwork network,
     Func<WorkerControlConfig?> config, ConfigFile file, Action reload, string directory, TimeProvider time, ILogger logger)
 {
-    public static readonly string[] Kinds = ["worker", "api", "service"];
+    private static IReadOnlyList<string> Kinds => TransportKinds.Creatable;
     public const string DefaultSiteName = "{name} {n}";
     private const int MostInstances = 16;
     private const long BiggestConfig = 512 * 1024;

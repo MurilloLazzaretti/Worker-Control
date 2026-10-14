@@ -27,7 +27,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
     private static JArray Files(IEnumerable<FileEntry> files) =>
         new(files.Select(file => new JObject { ["Path"] = file.Path, ["Size"] = file.Size, ["Sha256"] = file.Sha256 }));
 
-    public static readonly string[] Kinds = ["worker", "service", "api", "frontend"];
+    private static IReadOnlyList<string> Kinds => TransportKinds.Folders;
 
     /// <summary>
     /// For how long what was left in the inbox has to be still before it is taken: a folder

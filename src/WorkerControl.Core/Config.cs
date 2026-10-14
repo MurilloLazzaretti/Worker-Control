@@ -96,6 +96,20 @@ public sealed record ProxyConfig
 }
 
 /// <summary>
+/// The kinds of application the transport takes a folder of. A file for download is not one of
+/// them: it is put in place on its own, from the folder declared in <c>Downloads</c>.
+/// </summary>
+public static class TransportKinds
+{
+    public static readonly IReadOnlyList<string> Folders = ["worker", "service", "api", "frontend"];
+
+    /// <summary>
+    /// The ones that can be created and removed from the panel.
+    /// </summary>
+    public static readonly IReadOnlyList<string> Creatable = ["worker", "api", "service"];
+}
+
+/// <summary>
 /// The replacing of what runs on this machine by what a package of changes brings.
 /// </summary>
 public sealed record TransportConfig
@@ -758,7 +772,7 @@ public static class ConfigReader
                     throw new ConfigException($"Every target must be an object in {where}");
                 var kind = Text(item, "Kind", inTarget)?.Trim().ToLowerInvariant();
                 var name = Text(item, "Name", inTarget)?.Trim();
-                if (kind is not ("worker" or "service" or "api" or "frontend"))
+                if (kind is null || !TransportKinds.Folders.Contains(kind))
                     throw new ConfigException($"\"Kind\" must be worker, service, api or frontend in {inTarget}");
                 if (string.IsNullOrEmpty(name))
                     throw new ConfigException($"\"Name\" is required in {inTarget}");
@@ -791,7 +805,7 @@ public static class ConfigReader
         foreach (var item in said.EnumerateObject())
         {
             var kind = item.Name.Trim().ToLowerInvariant();
-            if (kind is not ("worker" or "service" or "api"))
+            if (!TransportKinds.Creatable.Contains(kind))
                 throw new ConfigException($"\"{name}\" takes worker, service and api in {where}");
             if (item.Value.ValueKind != JsonValueKind.String)
                 throw new ConfigException($"The folder of {kind} must be a path in {where}");
@@ -811,7 +825,7 @@ public static class ConfigReader
         foreach (var item in said.EnumerateObject())
         {
             var kind = item.Name.Trim().ToLowerInvariant();
-            if (kind is not ("worker" or "service" or "api" or "frontend"))
+            if (!TransportKinds.Folders.Contains(kind))
                 throw new ConfigException($"\"Inboxes\" takes worker, service, api and frontend in {where}");
             if (item.Value.ValueKind != JsonValueKind.String)
                 throw new ConfigException($"The inbox of {kind} must be the path of a folder in {where}");
