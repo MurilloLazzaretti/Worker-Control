@@ -425,6 +425,18 @@ Requests go to the queue `WorkerControlAdmin`, as RPC messages. The two commands
 | `Health` | `Group`, `ProcessId`, `From`, `To`, `Limit` (all optional) | The measurements, oldest first |
 | `DetachAndStop` | | Stops the service leaving the instances running |
 
+**Who may ask.** Out of the box, whoever reaches the queue is answered. Once the service is given an administration key (`SetAdminKey`, with `Key`: 32 bytes in base64 — the panel of the ZapMQ does it for its master user), it only takes requests sealed with it:
+
+```json
+{ "Sealed": "<base64 of nonce (12 bytes) + tag (16 bytes) + AES-256-GCM of the text below>" }
+```
+
+```json
+{ "At": 1791936029108, "Id": "6f1c…", "Request": { "Command": "Status" } }
+```
+
+`At` is the time of the request in milliseconds since 1970, and has to be within 10 minutes of the clock of the service; `Id` is taken once. The answer comes back the same way, as `{ "Id": "…", "Answer": { … } }`. A command that is not sealed is answered `unauthenticated`, and one sealed for a service that has no key, `no-key`. The key is kept in `admin.key`, in the data folder, in a form only the machine reads back; removing the file and starting the service again leaves it without a key. The two commands of 1.x are answered as before, sealed or not.
+
 `By`, optional in any command that changes something, is recorded in the history. The changes to groups are written to `ConfigWorkers.json`, keeping the previous version as `ConfigWorkers.json.bak`.
 
 ## 📜 Log and history

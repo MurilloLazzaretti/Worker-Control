@@ -46,12 +46,18 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private DatabaseMonitor? _database;
     private TransportWork? _transport;
     private ProxyWork? _proxy;
+    private AdminGuard? _guard;
     private ApplicationWork? _applications;
     private HistoryStore? _history;
 
     protected override async Task ExecuteAsync(CancellationToken stopping)
     {
         _file = new ConfigFile(_directory);
+        _guard = new AdminGuard(_directory, secrets, time);
+        if (_guard.Problem is { } keyProblem)
+            _logger.LogError("{Problem}. No administration request is taken until the file is removed or replaced", keyProblem);
+        else if (!_guard.Protected)
+            _logger.LogWarning("There is no administration key: whoever reaches the queue {Queue} of the broker is answered. The panel of the ZapMQ sets one", LegacyAdmin.Queue);
         var config = await WaitForConfigAsync(stopping);
         if (config is null)
             return;
@@ -373,17 +379,21 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         if (supervisor is null)
             return null;
 
-        if (request.Value<string>("Command") is { } command)
+        if (request.Value<string>("Sealed") is { } sealedText)
         {
-            try
-            {
-                return Command(supervisor, command, request);
-            }
-            catch (Exception error)
-            {
-                _logger.LogError(error, "The administration command {Command} failed", command);
-                return Admin.Error("failed", error.Message);
-            }
+            if (_guard is not { Protected: true })
+                return Admin.Error("no-key", _guard?.Problem ?? "This Worker Control has no administration key: it takes requests that are not sealed");
+            if (_guard.Open(sealedText) is not { } opened)
+                return Admin.Error("unauthenticated", "The request was not sealed with the administration key of this Worker Control, or is not of now");
+            return _guard.Seal(Run(supervisor, opened.Request) ?? Admin.Error("unknown-command", "There is no such command"), opened.Id);
+        }
+
+        if (request.Value<string>("Command") is not null)
+        {
+            // With a key, nothing that changes or reads the machine is done for whoever merely reaches the queue.
+            if (_guard is { Protected: true } or { Problem: not null })
+                return Admin.Error("unauthenticated", _guard.Problem ?? "This Worker Control only takes requests sealed with its administration key");
+            return Run(supervisor, request);
         }
 
         // The two commands of 1.x, answered as 1.x did.
@@ -401,14 +411,42 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         }
     }
 
+    private JObject? Run(Supervisor supervisor, JObject request)
+    {
+        if (request.Value<string>("Command") is not { } command)
+            return null;
+        try
+        {
+            return Command(supervisor, command, request);
+        }
+        catch (Exception error)
+        {
+            _logger.LogError(error, "The administration command {Command} failed", command);
+            return Admin.Error("failed", error.Message);
+        }
+    }
+
     private JObject Command(Supervisor supervisor, string command, JObject request)
     {
         var by = request.Value<string>("By") is { Length: > 0 } who ? $" (by {who})" : "";
         switch (command)
         {
+            case "SetAdminKey":
+            {
+                // Reached only by whoever already has the key, or while there is none yet.
+                if (_guard!.SetKey(request.Value<string>("Key")) is { } refused)
+                    return Admin.Error("invalid-request", refused);
+                Record(EventKind.ManualAction, "the administration key was set: from now on only requests sealed with it are taken" + by);
+                return Admin.Ok(answer => answer["Protected"] = true);
+            }
+
             case "Status":
-                return Admin.Status(supervisor.GetStatus(), _startedAt, _config!.ZapMQHost, _config.ZapMQPort,
+            {
+                var status = Admin.Status(supervisor.GetStatus(), _startedAt, _config!.ZapMQHost, _config.ZapMQPort,
                     _broker?.HealthySince(time.GetUtcNow() - TimeSpan.FromSeconds(10)) ?? false, _lastHealth, _watcher!.GetStatus());
+                status["Protected"] = _guard!.Protected;
+                return status;
+            }
 
             case "Traffic" when _traffic is null:
             case "TrafficUpstreams" when _traffic is null:

@@ -181,16 +181,26 @@ public sealed class Rig : IAsyncDisposable
     /// <summary>
     /// A command of the 2.0 contract, sent over ZapMQ. Null when nobody answered.
     /// </summary>
-    public async Task<JObject?> CommandAsync(string command, Action<JObject>? more = null)
+    public Task<JObject?> CommandAsync(string command, Action<JObject>? more = null)
     {
         var request = new JObject { ["Command"] = command, ["Version"] = 1 };
         more?.Invoke(request);
+        return RawAsync(request);
+    }
+
+    private async Task<JObject?> RawAsync(JObject request)
+    {
         var answer = new TaskCompletionSource<JObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_admin.SendRPCMessage("WorkerControlAdmin", request, message => answer.TrySetResult(message.Response as JObject), 5000))
             return null;
         var first = await Task.WhenAny(answer.Task, Task.Delay(TimeSpan.FromSeconds(10)));
         return first == answer.Task ? await answer.Task : null;
     }
+
+    /// <summary>
+    /// A request that was sealed, as the panel of the ZapMQ sends it once there is a key.
+    /// </summary>
+    public Task<JObject?> SealedAsync(string sealedText) => RawAsync(new JObject { ["Sealed"] = sealedText });
 
     /// <summary>
     /// A publisher of its own, to fill queues the way an application would.
