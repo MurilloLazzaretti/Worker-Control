@@ -84,6 +84,7 @@ internal static class Admin
             ["Root"] = app.Root,
             ["BaseUrl"] = app.BaseUrl,
             ["Problem"] = app.Problem,
+            ["Mode"] = app.Mode,
             ["CheckedAt"] = app.CheckedAt,
             ["ShellPublishedAt"] = app.ShellAt,
             ["Orphans"] = new JArray(app.Orphans),

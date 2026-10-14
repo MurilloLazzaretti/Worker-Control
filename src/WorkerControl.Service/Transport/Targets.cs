@@ -113,14 +113,40 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
         }
 
         foreach (var app in apps)
+        {
+            static string? VersionOf(FrontendWatcher.Module module) => module.Versions.FirstOrDefault()?.Version ?? (module.Build is { } build ? "build " + build : null);
+
+            // A monolith is replaced whole: its folder, leaving alone what belongs to the environment.
+            if (app.Mode == "monolith")
+            {
+                targets.Add(new DeployTarget("frontend", app.Name, [Folder(app.Root)], keep)
+                {
+                    Version = app.Modules.Select(VersionOf).FirstOrDefault(),
+                    Problem = app.Problem
+                });
+                continue;
+            }
+
+            var moduleFolders = new List<string>();
             foreach (var module in app.Modules)
             {
-                var folder = Path.GetDirectoryName(Path.Combine(app.Root, module.Entry.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar)));
+                var entry = module.Entry.Replace('\\', '/').TrimStart('/');
+                var folder = Path.GetDirectoryName(Path.Combine(app.Root, entry.Replace('/', Path.DirectorySeparatorChar)));
                 targets.Add(new DeployTarget("frontend", apps.Count > 1 ? $"{app.Name}/{module.Name}" : module.Name, folder is null ? [] : [folder], keep)
                 {
-                    Version = module.Versions.FirstOrDefault()?.Version ?? (module.Build is { } build ? "build " + build : null)
+                    Version = VersionOf(module)
                 });
+                if (entry.LastIndexOf('/') is var slash and > 0)
+                    moduleFolders.Add(entry[..(slash + 1)]);
             }
+
+            // The shell: the folder of the application without the modules it loads, nor the list of them, which are of the environment.
+            targets.Add(new DeployTarget("frontend", apps.Count > 1 ? $"{app.Name}/{FrontendWatcher.ShellTarget}" : FrontendWatcher.ShellTarget, [Folder(app.Root)],
+                [.. keep, .. moduleFolders.Distinct(StringComparer.OrdinalIgnoreCase), app.Manifest.Replace('\\', '/').TrimStart('/')])
+            {
+                Problem = app.Problem is null ? null : "The modules of the application could not be read, so what to leave alone in its folder is not known: " + app.Problem
+            });
+        }
 
         // What the configuration says stands over what was worked out.
         foreach (var said in now.Transport.Targets)

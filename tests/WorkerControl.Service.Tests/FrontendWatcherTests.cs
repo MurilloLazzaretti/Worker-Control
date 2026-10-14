@@ -223,4 +223,28 @@ public sealed class FrontendWatcherTests : IDisposable
         Assert.Contains((FrontendWatcher.Shell, "published"), kinds);
         Assert.NotNull(watcher.Snapshot().Apps.Single().ShellAt);
     }
+
+    [Fact]
+    public void A_monolith_is_one_application_with_its_page_and_its_version()
+    {
+        var watcher = new FrontendWatcher(_data, (url, asked) =>
+        {
+            _asked.Add((url, asked));
+            return (200, null);
+        }, _time, NullLogger.Instance);
+        watcher.ApplyConfig([new FrontendConfig { Name = "Portal", Root = _root, BaseUrl = "http://app.test", Mode = "monolith" }]);
+        File.WriteAllText(Path.Combine(_root, "index.html"), "<html></html>");
+        File.WriteAllText(Path.Combine(_root, "version.json"), """{ "nome": "Portal", "build": 3, "versions": [ { "version": "5.0.0", "date": "01/10/2026", "descriptions": [] } ] }""");
+
+        watcher.Scan();
+
+        var app = Assert.Single(watcher.Snapshot().Apps);
+        Assert.Equal(("monolith", null), (app.Mode, app.Problem));
+        var whole = Assert.Single(app.Modules);
+        Assert.Equal(("Portal", "Up", "5.0.0"), (whole.Name, whole.State, whole.Versions[0].Version));
+        Assert.Contains(_asked, asked => asked.Url == "http://app.test/index.html");
+        // There is no list of modules to read, and nothing around them to tell apart.
+        Assert.Empty(app.Orphans);
+        Assert.Null(app.ShellAt);
+    }
 }

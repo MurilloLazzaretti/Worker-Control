@@ -21,6 +21,11 @@ internal sealed class FrontendWatcher(string directory, Func<string, string?, (i
     /// </summary>
     public const string Shell = "(shell)";
 
+    /// <summary>
+    /// How the shell of an application of modules is called as something a package replaces.
+    /// </summary>
+    public const string ShellTarget = "shell";
+
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(60);
     private const int KeptPublications = 300;
 
@@ -56,7 +61,18 @@ internal sealed class FrontendWatcher(string directory, Func<string, string?, (i
         IReadOnlyList<VersionEntry> Versions, DateTimeOffset? PublishedAt, int Files, long Bytes);
 
     public sealed record App(string Name, string Root, string? BaseUrl, string? Problem, DateTimeOffset CheckedAt, DateTimeOffset? ShellAt,
-        IReadOnlyList<Module> Modules, IReadOnlyList<string> Orphans);
+        IReadOnlyList<Module> Modules, IReadOnlyList<string> Orphans)
+    {
+        /// <summary>
+        /// mfe or monolith. A monolith is told as one module, the whole application.
+        /// </summary>
+        public string Mode { get; init; } = "mfe";
+
+        /// <summary>
+        /// Where, under the root, the list of the modules is.
+        /// </summary>
+        public string Manifest { get; init; } = "assets/mf.manifest.json";
+    }
 
     private readonly object _gate = new();
     private readonly string _path = Path.Combine(directory, "frontends.json");
@@ -155,14 +171,18 @@ internal sealed class FrontendWatcher(string directory, Func<string, string?, (i
 
     private App Look(FrontendConfig config, AppMemory memory, bool firstLook, DateTimeOffset now, List<Publication> publications, List<SupervisorEvent> raised, ref bool changed)
     {
-        App Failed(string problem) => new(config.Name, config.Root, config.BaseUrl, problem, now, null, [], []);
+        App Failed(string problem) => new(config.Name, config.Root, config.BaseUrl, problem, now, null, [], []) { Mode = config.Mode, Manifest = config.Manifest };
+        var monolith = config.Mode == "monolith";
 
         if (!Directory.Exists(config.Root))
             return Failed($"The folder {config.Root} does not exist");
 
         var manifestPath = Resolve(config.Root, config.Manifest);
         Dictionary<string, string> entries;
-        try
+        // One application, published whole: it is its own only module, and its page is its entry.
+        if (monolith)
+            entries = new Dictionary<string, string>(StringComparer.Ordinal) { [config.Name] = "index.html" };
+        else try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(manifestPath), new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
             entries = document.RootElement.EnumerateObject()
@@ -252,7 +272,7 @@ internal sealed class FrontendWatcher(string directory, Func<string, string?, (i
         // The application around the modules: when it changes, everybody gets new code.
         DateTimeOffset? shellAt = null;
         var index = Path.Combine(config.Root, "index.html");
-        if (File.Exists(index))
+        if (!monolith && File.Exists(index))
         {
             shellAt = Whole(File.GetLastWriteTimeUtc(index));
             if (!firstLook && memory.ShellAt is not null && memory.ShellAt != shellAt)
@@ -267,7 +287,7 @@ internal sealed class FrontendWatcher(string directory, Func<string, string?, (i
         if (firstLook && seenForTheFirstTime > 0)
             publications.Add(new Publication(now, config.Name, "*", "first-seen", null, null, null, null, seenForTheFirstTime));
 
-        return new App(config.Name, config.Root, config.BaseUrl, null, now, shellAt, modules, Orphans(folders));
+        return new App(config.Name, config.Root, config.BaseUrl, null, now, shellAt, modules, monolith ? [] : Orphans(folders)) { Mode = config.Mode, Manifest = config.Manifest };
     }
 
     /// <summary>

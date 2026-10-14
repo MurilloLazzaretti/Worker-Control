@@ -529,7 +529,7 @@ public sealed class TargetCatalogTests : IDisposable
 
         var targets = catalog.All().ToDictionary(target => target.Kind + ":" + target.Name);
 
-        Assert.Equal(["api:Orders", "api:Stock", "frontend:orders", "service:Missing", "service:Sockets", "service:Wrapped", "worker:Orders", "worker:OrdersNight"], targets.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["api:Orders", "api:Stock", "frontend:orders", "frontend:shell", "service:Missing", "service:Sockets", "service:Wrapped", "worker:Orders", "worker:OrdersNight"], targets.Keys.Order(StringComparer.Ordinal));
         // The two groups run the same program: they go together.
         Assert.Equal(["Orders", "OrdersNight"], targets["worker:Orders"].Groups);
         // The instances of an application are one target with every folder; the site of the web application is not an api.
@@ -539,6 +539,17 @@ public sealed class TargetCatalogTests : IDisposable
         Assert.Equal(["Api Stock 1", "Api Stock 2"], targets["api:Stock"].Sites);
         Assert.EndsWith(Path.Combine("mfe", "orders"), targets["frontend:orders"].Paths.Single());
         Assert.Equal("1.4.0", targets["frontend:orders"].Version);
+        // The shell is the folder of the application, without the modules it loads nor the list of them.
+        Assert.EndsWith(Path.Combine("www", "app"), targets["frontend:shell"].Paths.Single());
+        Assert.Contains("mfe/orders/", targets["frontend:shell"].Keep);
+        Assert.Contains("assets/mf.manifest.json", targets["frontend:shell"].Keep);
+        Assert.Null(targets["frontend:shell"].Problem);
+
+        // A monolith is one target, the whole folder.
+        var whole = new TargetCatalog(() => config, machine, machine, () => [web with { Modules = [] } with { Mode = "monolith" }]).All().Where(target => target.Kind == "frontend").ToList();
+        Assert.Equal(("App", Path.Combine(_root, "www", "app")), (whole.Single().Name, whole.Single().Paths.Single()));
+        // Without knowing its modules, the shell is not replaced: what to leave alone is not known.
+        Assert.NotNull(new TargetCatalog(() => config, machine, machine, () => [web with { Modules = [], Problem = "no manifest" }]).Find("frontend", "shell")!.Problem);
         Assert.Contains("not installed", targets["service:Missing"].Problem);
         // A wrapper says nothing of where the program is; the configuration does.
         Assert.Null(targets["service:Wrapped"].Problem);

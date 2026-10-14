@@ -255,6 +255,7 @@ A web application made of modules published as folders (micro frontends) can be 
 | `Host` | none | The name of the site, when `BaseUrl` is only the address of the machine |
 | `Manifest` | `assets/mf.manifest.json` | The file with the modules: an object of name and path of the entry file |
 | `VersionFile` | `version.json` | The file beside the entry file of each module, with `nome`, `build` and `versions` (`version`, `date`, `descriptions`), the newest first |
+| `Mode` | `mfe` | `mfe`: a shell that loads the modules listed in `Manifest`; the shell and each module are replaced apart, the shell leaving alone the folders of the modules and the manifest. `monolith`: one application, replaced whole; its version is in `VersionFile` at the root |
 
 What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
 

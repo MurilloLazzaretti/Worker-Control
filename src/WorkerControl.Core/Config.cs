@@ -321,6 +321,12 @@ public sealed record FrontendConfig
     /// The file, beside the entry file of each module, where the module says its version.
     /// </summary>
     public string VersionFile { get; init; } = "version.json";
+
+    /// <summary>
+    /// mfe: a shell that loads modules published apart, listed in <see cref="Manifest"/>.
+    /// monolith: one application, published whole.
+    /// </summary>
+    public string Mode { get; init; } = "mfe";
 }
 
 public sealed record GroupConfig
@@ -861,7 +867,13 @@ public static class ConfigReader
                 BaseUrl = address,
                 Host = Text(item, "Host", where) is { Length: > 0 } host ? host.Trim() : null,
                 Manifest = Text(item, "Manifest", where) is { Length: > 0 } manifest ? manifest.Trim() : "assets/mf.manifest.json",
-                VersionFile = Text(item, "VersionFile", where) is { Length: > 0 } version ? version.Trim() : "version.json"
+                VersionFile = Text(item, "VersionFile", where) is { Length: > 0 } version ? version.Trim() : "version.json",
+                Mode = Text(item, "Mode", where)?.Trim().ToLowerInvariant() switch
+                {
+                    null or "" or "mfe" => "mfe",
+                    "monolith" => "monolith",
+                    _ => throw new ConfigException($"\"Mode\" must be mfe or monolith in {where}")
+                }
             });
         }
         return frontends;
