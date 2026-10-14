@@ -48,6 +48,11 @@ public sealed record WorkerControlConfig
     public IReadOnlyList<FrontendConfig> Frontends { get; init; } = [];
 
     /// <summary>
+    /// Folders of files that are only downloaded, served as they are: the apps for the phones, for one.
+    /// </summary>
+    public IReadOnlyList<DownloadConfig> Downloads { get; init; } = [];
+
+    /// <summary>
     /// The access log of the reverse proxy, read to measure the traffic. Null reads none.
     /// </summary>
     public TrafficConfig? Traffic { get; init; }
@@ -329,6 +334,27 @@ public sealed record FrontendConfig
     public string Mode { get; init; } = "mfe";
 }
 
+/// <summary>
+/// A folder of files that are only downloaded. Each file is replaced on its own, and what
+/// version each one is is written beside them, for whoever downloads them to read.
+/// </summary>
+public sealed record DownloadConfig
+{
+    public required string Name { get; init; }
+
+    public required string Root { get; init; }
+
+    /// <summary>
+    /// Which files of the folder are distributed.
+    /// </summary>
+    public string Files { get; init; } = "*.apk";
+
+    /// <summary>
+    /// The file, in the folder, that says the version of each one.
+    /// </summary>
+    public string VersionsFile { get; init; } = "versions.json";
+}
+
 public sealed record GroupConfig
 {
     public required string Name { get; init; }
@@ -554,6 +580,7 @@ public static class ConfigReader
                 Groups = ReadGroups(root, general),
                 Services = ReadServices(root),
                 Frontends = ReadFrontends(root),
+                Downloads = ReadDownloads(root),
                 Traffic = ReadTraffic(root),
                 Database = ReadDatabase(root),
                 Transport = ReadTransport(root),
@@ -831,6 +858,41 @@ public static class ConfigReader
             ObjectScanMinutes = Integer(database, "ObjectScanMinutes", where, defaultValue: 10, minimum: 0),
             ObjectHistoryDays = Integer(database, "ObjectHistoryDays", where, defaultValue: 365, minimum: 1)
         };
+    }
+
+    private static List<DownloadConfig> ReadDownloads(JsonElement root)
+    {
+        var downloads = new List<DownloadConfig>();
+        if (!root.TryGetProperty("Downloads", out var array) || array.ValueKind == JsonValueKind.Null)
+            return downloads;
+        if (array.ValueKind != JsonValueKind.Array)
+            throw new ConfigException("\"Downloads\" must be a list");
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new ConfigException("Every item of \"Downloads\" must be an object");
+            var name = Text(item, "Name", "a folder of downloads")?.Trim();
+            if (string.IsNullOrEmpty(name) || name.IndexOfAny(['/', '\\']) >= 0)
+                throw new ConfigException("Every folder of downloads needs a \"Name\", without slashes");
+            if (!names.Add(name))
+                throw new ConfigException($"There are two folders of downloads named \"{name}\"");
+            var where = $"downloads \"{name}\"";
+            var folder = Text(item, "Root", where)?.Trim();
+            if (string.IsNullOrEmpty(folder))
+                throw new ConfigException($"\"Root\" is required in {where}");
+            var versions = Text(item, "VersionsFile", where) is { Length: > 0 } file ? file.Trim() : "versions.json";
+            if (versions.IndexOfAny(['/', '\\']) >= 0)
+                throw new ConfigException($"\"VersionsFile\" is a name of a file in the folder, in {where}");
+            downloads.Add(new DownloadConfig
+            {
+                Name = name,
+                Root = folder,
+                Files = Text(item, "Files", where) is { Length: > 0 } files ? files.Trim() : "*.apk",
+                VersionsFile = versions
+            });
+        }
+        return downloads;
     }
 
     private static List<FrontendConfig> ReadFrontends(JsonElement root)

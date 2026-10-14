@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 using Newtonsoft.Json.Linq;
 using WorkerControl.Core;
@@ -19,6 +20,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         ["Groups"] = new JArray(target.Groups),
         ["Service"] = target.Service,
         ["Sites"] = new JArray(target.Sites),
+        ["File"] = target.File,
         ["Problem"] = target.Problem ?? (target.Paths.FirstOrDefault(path => !Directory.Exists(path)) is { } absent ? $"The folder {absent} does not exist" : null)
     };
 
@@ -107,7 +109,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         return Admin.Ok(answer =>
         {
             answer["Target"] = Describe(target);
-            answer["Files"] = folder is null ? new JArray() : Files(FileSet.List(folder, target.Keep));
+            answer["Files"] = folder is null ? new JArray() : Files(target.File is null ? FileSet.List(folder, target.Keep) : One(folder, target.File));
         });
     }
 
@@ -133,7 +135,17 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
             File.Delete(old);
 
         var file = Path.Combine(staging, Guid.NewGuid().ToString("N") + ".zip");
-        var files = FileSet.Zip(folder, target.Keep, file);
+        List<FileEntry> files;
+        if (target.File is null)
+            files = FileSet.Zip(folder, target.Keep, file);
+        else
+        {
+            // One file of a folder of downloads: that file, and nothing else of the folder.
+            files = One(folder, target.File);
+            if (files.Count > 0)
+                using (var zip = System.IO.Compression.ZipFile.Open(file, System.IO.Compression.ZipArchiveMode.Create))
+                    zip.CreateEntryFromFile(Path.Combine(folder, target.File), target.File);
+        }
         if (files.Count == 0)
         {
             File.Delete(file);
@@ -424,14 +436,23 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         });
     }
 
-    public JObject Deploy(string? kind, string? name, string? file, string package, int item, bool force, CancellationToken stopping)
+    private static List<FileEntry> One(string folder, string file)
+    {
+        var path = Path.Combine(folder, file);
+        if (!File.Exists(path))
+            return [];
+        using var stream = File.OpenRead(path);
+        return [new FileEntry(file, stream.Length, Convert.ToHexStringLower(SHA256.HashData(stream)))];
+    }
+
+    public JObject Deploy(string? kind, string? name, string? file, string package, int item, bool force, CancellationToken stopping, string? version = null)
     {
         if (catalog.Find(kind, name) is not { } target)
             return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
         if (string.IsNullOrEmpty(file) || !File.Exists(file))
             return Admin.Error("invalid-request", "The files of the item are not where they were said to be");
 
-        var result = deployer.DeployAsync(target, file, package, item, config()?.Transport.KeepVersions ?? 3, stopping, force).GetAwaiter().GetResult();
+        var result = deployer.DeployAsync(target, file, package, item, config()?.Transport.KeepVersions ?? 3, stopping, force, version).GetAwaiter().GetResult();
         return Admin.Ok(answer =>
         {
             answer["Applied"] = result.Ok;

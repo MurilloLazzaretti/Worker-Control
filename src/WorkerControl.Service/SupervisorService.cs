@@ -676,7 +676,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     return Admin.Error("invalid-request", "\"Package\" and \"Item\" are required");
                 var kind = request.Value<string>("Kind");
                 var name = request.Value<string>("Name");
-                var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping);
+                var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping,
+                    request.Value<string>("Version") is { Length: > 0 } version ? version.Trim() : null);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "replaced" : "not replaced, " + answer.Value<string>("Problem"))}" + by);

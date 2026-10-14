@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Diagnostics;
 using WorkerControl.Core;
 
@@ -123,7 +124,7 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
 
     private string BackupRoot(DeployTarget target) => Path.Combine(directory, "backup", target.Kind, Safe(target.Name));
 
-    public async Task<DeployResult> DeployAsync(DeployTarget target, string zipPath, string package, int item, int keepVersions, CancellationToken stopping, bool force = false)
+    public async Task<DeployResult> DeployAsync(DeployTarget target, string zipPath, string package, int item, int keepVersions, CancellationToken stopping, bool force = false, string? version = null)
     {
         var steps = new List<string>();
         void Did(string step)
@@ -131,6 +132,9 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
             steps.Add(step);
             logger.LogInformation("Package {Package}, item {Item}, {Kind} {Name}: {Step}", package, item, target.Kind, target.Name, step);
         }
+
+        if (target.File is not null)
+            return PutFile(target, zipPath, package, keepVersions, version, Did, steps);
 
         if (target.Problem is not null)
             return new DeployResult(false, target.Problem, steps, null, null, false);
@@ -210,6 +214,84 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     }
 
     /// <summary>
+    /// One file of a folder of downloads: nothing runs from it, so nothing is stopped. The file
+    /// as it was, and the list of versions, are kept first; then the file is replaced in one
+    /// step and its version written.
+    /// </summary>
+    private DeployResult PutFile(DeployTarget target, string zipPath, string package, int keepVersions, string? version, Action<string> did, List<string> steps)
+    {
+        var folder = target.Paths.FirstOrDefault();
+        if (folder is null || !Directory.Exists(folder))
+            return new DeployResult(false, $"The folder {folder} does not exist on this machine", steps, null, null, false);
+        var file = Path.Combine(folder, target.File!);
+        var backup = Path.Combine(BackupRoot(target), $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Safe(package)[..Math.Min(8, package.Length)]}");
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
+            var entries = zip.Entries.Where(entry => !entry.FullName.EndsWith('/') && !entry.FullName.EndsWith('\\')).ToList();
+            if (entries.Count != 1 || !Path.GetFileName(entries[0].FullName.Replace('\\', '/')).Equals(target.File, StringComparison.OrdinalIgnoreCase))
+                return new DeployResult(false, $"The item has to carry the file {target.File}, and only it", steps, null, null, false);
+
+            var existed = File.Exists(file);
+            Directory.CreateDirectory(Path.Combine(backup, "0"));
+            if (existed)
+                File.Copy(file, Path.Combine(backup, "0", target.File!));
+            if (File.Exists(Path.Combine(folder, target.VersionsFile!)))
+                File.Copy(Path.Combine(folder, target.VersionsFile!), Path.Combine(backup, "0", target.VersionsFile!));
+            did(existed ? $"kept a copy of {target.File}" : $"{target.File} is new in {folder}");
+
+            var temporary = file + ".new";
+            entries[0].ExtractToFile(temporary, overwrite: true);
+            File.Move(temporary, file, overwrite: true);
+            Downloads.Record(folder, target.VersionsFile!, target.File!, version, time.GetUtcNow());
+            did($"{(existed ? "replaced" : "added")} {target.File}{(version is null ? "" : ", version " + version)}");
+            Prune(target, keepVersions);
+            return new DeployResult(true, null, steps, new MirrorResult(existed ? 0 : 1, existed ? 1 : 0, 0, 0), backup, true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return new DeployResult(false, $"{target.File} could not be put in place: {error.Message}", steps, null, Directory.Exists(backup) ? backup : null, false);
+        }
+    }
+
+    /// <summary>
+    /// Puts one file of a folder of downloads back as the copy has it, or takes it away when the copy says it was new.
+    /// </summary>
+    private DeployResult TakeFileBack(DeployTarget target, string copy, string package, Action<string> did, List<string> steps)
+    {
+        var folder = target.Paths[0];
+        var file = Path.Combine(folder, target.File!);
+        var before = Path.Combine(BackupRoot(target), $"{time.GetUtcNow():yyyyMMdd-HHmmss}-{Safe(package)[..Math.Min(8, package.Length)]}-back");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(before, "0"));
+            if (File.Exists(file))
+                File.Copy(file, Path.Combine(before, "0", target.File!));
+            var kept = Path.Combine(copy, "0", target.File!);
+            if (File.Exists(kept))
+            {
+                File.Copy(kept, file + ".new", overwrite: true);
+                File.Move(file + ".new", file, overwrite: true);
+                did($"put {target.File} back as it was");
+            }
+            else
+            {
+                File.Delete(file);
+                did($"took away {target.File}, which the package had added");
+            }
+            // The version it had is the one the kept list says.
+            var keptVersions = Path.Combine(copy, "0", target.VersionsFile!);
+            var version = File.Exists(keptVersions) ? Downloads.Versions(Path.Combine(copy, "0"), target.VersionsFile!).GetValueOrDefault(target.File!) : null;
+            Downloads.Record(folder, target.VersionsFile!, target.File!, version, time.GetUtcNow());
+            return new DeployResult(true, null, steps, null, before, true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return new DeployResult(false, $"{target.File} could not be put back: {error.Message}", steps, null, before, false);
+        }
+    }
+
+    /// <summary>
     /// Puts the files of a target back as a copy kept when a package replaced them. Whatever
     /// runs from the folder is stopped and started, a copy of what is there now is kept first,
     /// and the configuration of the environment is left as it is.
@@ -229,6 +311,8 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
             return new DeployResult(false, "This is not a copy kept for this target", steps, null, null, false);
         if (!Directory.Exists(copy))
             return new DeployResult(false, "The copy of how it was is not kept any more; only the latest ones are", steps, null, null, false);
+        if (target.File is not null)
+            return TakeFileBack(target, copy, package, Did, steps);
         if (target.Paths.Count == 0 || target.Paths.FirstOrDefault(path => !Directory.Exists(path)) is not null)
             return new DeployResult(false, "The folder of this target is not on this machine", steps, null, null, false);
         if (Enumerable.Range(0, target.Paths.Count).FirstOrDefault(index => !Directory.Exists(Path.Combine(copy, index.ToString())), -1) >= 0)

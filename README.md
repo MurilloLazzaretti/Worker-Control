@@ -261,6 +261,23 @@ A web application made of modules published as folders (micro frontends) can be 
 
 What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
 
+### Downloads
+
+A folder of files that are only downloaded, served by a site of the web server (the apps for the phones, for one). Each file is a target of its own: it is replaced alone, under the same name, so the address it is downloaded from does not change, and nothing is stopped. A file that is not in the folder yet is added the first time a package brings it. The site itself is no longer taken for an application of the web server.
+
+```json
+"Downloads": [ { "Name": "APKs", "Root": "D:\\www\\APKs" } ]
+```
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Name` | | How the folder is called in the panel |
+| `Root` | | The folder the site serves |
+| `Files` | `*.apk` | Which files of the folder are distributed |
+| `VersionsFile` | `versions.json` | The file, in the folder, that says what each one is: `{ "apps": [ { "name", "file", "version", "size", "sha256", "publishedAt" } ] }`, written each time a file is put in place or taken back |
+
+The version of a file is the one given when it was uploaded, carried by the package.
+
 ### Database
 
 The one database instance the applications of the machine use can be watched too: whether it

@@ -30,6 +30,12 @@ public sealed record DeployTarget(string Kind, string Name, IReadOnlyList<string
     /// Why it cannot be replaced as it is known: no folder could be told, for one.
     /// </summary>
     public string? Problem { get; init; }
+
+    /// <summary>
+    /// For one file of a folder of downloads: its name in the folder, and the file that says the versions.
+    /// </summary>
+    public string? File { get; init; }
+    public string? VersionsFile { get; init; }
 }
 
 /// <summary>
@@ -99,8 +105,9 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
         // The sites that serve the same folder are one application. A folder that is only a
         // number is an instance of the application its parent folder is named after.
         var apps = frontends();
+        // A site that only serves files to download is not an application: its files are.
         var sites = network.Sites()
-            .Where(site => !apps.Any(app => SameFolder(app.Root, site.PhysicalPath)))
+            .Where(site => !apps.Any(app => SameFolder(app.Root, site.PhysicalPath)) && !now.Downloads.Any(area => SameFolder(area.Root, site.PhysicalPath)))
             .GroupBy(site => ApplicationName(site.PhysicalPath), StringComparer.OrdinalIgnoreCase);
         foreach (var application in sites.Where(group => group.Key.Length > 0))
         {
@@ -148,6 +155,20 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
             });
         }
 
+        foreach (var area in now.Downloads)
+        {
+            if (!Directory.Exists(area.Root))
+                continue;
+            var versions = Downloads.Versions(area.Root, area.VersionsFile);
+            foreach (var path in Directory.EnumerateFiles(area.Root).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var file = Path.GetFileName(path);
+                if (!Downloads.Fits(file, area.Files) || file.Equals(area.VersionsFile, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                targets.Add(DownloadTarget(area, file, now.Downloads.Count > 1, versions.GetValueOrDefault(file)));
+            }
+        }
+
         // What the configuration says stands over what was worked out.
         foreach (var said in now.Transport.Targets)
         {
@@ -175,6 +196,21 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
         return folder.Name.All(char.IsDigit) && folder.Parent is not null ? folder.Parent.Name : folder.Name;
     }
 
-    public DeployTarget? Find(string? kind, string? name) =>
-        All().FirstOrDefault(target => target.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase) && target.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+    private static DeployTarget DownloadTarget(DownloadConfig area, string file, bool many, string? version) =>
+        new("download", many ? $"{area.Name}/{file}" : file, [Folder(area.Root)], []) { File = file, VersionsFile = area.VersionsFile, Version = version };
+
+    public DeployTarget? Find(string? kind, string? name)
+    {
+        var found = All().FirstOrDefault(target => target.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase) && target.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (found is not null || !string.Equals(kind, "download", StringComparison.OrdinalIgnoreCase) || name is null || config() is not { } now)
+            return found;
+        // A file that is not in the folder yet: it is added the first time it is put there.
+        var slash = name.IndexOf('/');
+        var area = now.Downloads.Count == 1 && slash < 0 ? now.Downloads[0]
+            : slash > 0 ? now.Downloads.FirstOrDefault(candidate => candidate.Name.Equals(name[..slash], StringComparison.OrdinalIgnoreCase)) : null;
+        var file = slash > 0 ? name[(slash + 1)..] : name;
+        return area is not null && Directory.Exists(area.Root) && Downloads.Fits(file, area.Files) && !file.Equals(area.VersionsFile, StringComparison.OrdinalIgnoreCase)
+            ? DownloadTarget(area, file, now.Downloads.Count > 1, null)
+            : null;
+    }
 }

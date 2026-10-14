@@ -19,7 +19,7 @@ internal sealed class ConfigFile(string directory)
     /// <summary>
     /// The sections that belong to the environment, and live in <see cref="EnvironmentName"/>.
     /// </summary>
-    public static readonly string[] EnvironmentSections = ["Database", "Transport", "Traffic", "Frontends", "Proxy"];
+    public static readonly string[] EnvironmentSections = ["Database", "Transport", "Traffic", "Frontends", "Downloads", "Proxy"];
 
     private readonly object _gate = new();
 
