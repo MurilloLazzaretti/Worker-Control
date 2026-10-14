@@ -30,6 +30,12 @@ public sealed record DatabaseInfo(string Name, string State, string Recovery, st
 public sealed record SessionGroup(string Program, string Host, string Login, string Database, int Sessions, int Running, int InTransaction);
 
 /// <summary>
+/// The connections one process of one machine has to a database: how many, how many are doing
+/// something, and for how many seconds it has asked for nothing (-1 when that is not known).
+/// </summary>
+public sealed record ClientProcess(string Host, int ProcessId, string Program, string Database, int Sessions, int Running, int IdleSeconds);
+
+/// <summary>
 /// Something an application is doing on the instance right now, or a session that keeps another waiting.
 /// </summary>
 public sealed record Activity(int SessionId, string Status, string Command, long ElapsedMs, long CpuMs, long Reads, string WaitType, long WaitMs,
@@ -64,6 +70,7 @@ public sealed record FastSample
     public InstanceResources? Resources { get; init; }
     public IReadOnlyList<DatabaseInfo>? Databases { get; init; }
     public IReadOnlyList<SessionGroup>? Sessions { get; init; }
+    public IReadOnlyList<ClientProcess>? Clients { get; init; }
     public IReadOnlyList<Activity>? Activity { get; init; }
     public IReadOnlyDictionary<string, string> Problems { get; init; } = new Dictionary<string, string>();
 }

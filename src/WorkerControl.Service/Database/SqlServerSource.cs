@@ -74,6 +74,8 @@ internal sealed class SqlServerSource : IDatabaseSource
             Databases = databases?.Select(database => logUsed is not null && logUsed.TryGetValue(database.Name, out var used) ? database with { LogUsedPercent = used } : database).ToList(),
             Sessions = await Part(sql, "Sessions", Queries.Sessions, problems, stopping, row =>
                 new SessionGroup(Text(row, 0), Text(row, 1), Text(row, 2), Text(row, 3), (int)Number(row, 4), (int)Number(row, 5), (int)Number(row, 6))),
+            Clients = await Part(sql, "Clients", Queries.Clients, problems, stopping, row =>
+                new ClientProcess(Text(row, 0), (int)Number(row, 1), Text(row, 2), Text(row, 3), (int)Number(row, 4), (int)Number(row, 5), (int)Number(row, 6))),
             Activity = await Part(sql, "Activity", Queries.Activity, problems, stopping, row =>
                 new Activity((int)Number(row, 0), Text(row, 1), Text(row, 2), Number(row, 3), Number(row, 4), Number(row, 5), Text(row, 6), Number(row, 7),
                     (int)Number(row, 8), Text(row, 9), Text(row, 10), Text(row, 11), Text(row, 12), (int)Number(row, 13), Number(row, 14) == 1, SqlText.Mask(Text(row, 15)))),

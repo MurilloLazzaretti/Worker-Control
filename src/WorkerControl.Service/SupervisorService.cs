@@ -47,6 +47,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private TransportWork? _transport;
     private ProxyWork? _proxy;
     private AdminGuard? _guard;
+    private TargetCatalog? _targets;
     private ApplicationWork? _applications;
     private HistoryStore? _history;
 
@@ -100,6 +101,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
         var transportDirectory = Path.GetFullPath(config.Transport.Directory, _directory);
         var targets = new TargetCatalog(() => _config, services, network, () => _frontends?.Snapshot().Apps ?? []);
+        _targets = targets;
         var groupSwitch = new GroupSwitch(this);
         var deployer = new Deployer(groupSwitch, services, webServer, time, transportDirectory, loggers.CreateLogger("WorkerControl.Transport"))
         {
@@ -486,6 +488,9 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
             case "Database":
                 return DatabaseAnswers.State(_database!.Snapshot(), _database.Tracking());
+
+            case "Landscape":
+                return Landscape.Describe(_targets!, webServer, network, _frontends?.Snapshot().Apps ?? [], _database?.Snapshot());
 
             case "DatabaseChanges" when _database?.Objects is null:
             case "DatabaseChange" when _database?.Objects is null:

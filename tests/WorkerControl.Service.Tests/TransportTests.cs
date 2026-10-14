@@ -191,6 +191,15 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
 
     public string? SiteThatFails { get; set; }
 
+    /// <summary>
+    /// The sites that are stopped, and the processes serving each of the others.
+    /// </summary>
+    public HashSet<string> StoppedSites { get; } = [];
+    public Dictionary<string, int[]> Serving { get; } = [];
+
+    public IReadOnlyList<WebSiteState> States() =>
+        [.. WebSites.Select(site => new WebSiteState(site.Name, !StoppedSites.Contains(site.Name), site.Name, !StoppedSites.Contains(site.Name), Serving.GetValueOrDefault(site.Name) ?? []))];
+
     public void CreateSite(string name, int port, string folder)
     {
         if (name == SiteThatFails)

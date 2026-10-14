@@ -72,6 +72,11 @@ public interface IWebServer
     IReadOnlyList<int> ProcessIds(IReadOnlyList<string> sites);
 
     /// <summary>
+    /// How every site of the web server stands: whether it is started, the pool it runs in and the processes serving it now.
+    /// </summary>
+    IReadOnlyList<WebSiteState> States() => [];
+
+    /// <summary>
     /// A site listening on a port and serving a folder, with a pool of its own, of the same name.
     /// </summary>
     void CreateSite(string name, int port, string folder) => throw new InvalidOperationException("Sites cannot be created on this system");
@@ -81,6 +86,12 @@ public interface IWebServer
     /// </summary>
     void DeleteSite(string name) => throw new InvalidOperationException("Sites cannot be removed on this system");
 }
+
+/// <summary>
+/// A site of the web server as it is now. One whose pool is started and has no process is
+/// only idle: the process comes with the first request.
+/// </summary>
+public sealed record WebSiteState(string Name, bool Started, string Pool, bool PoolStarted, IReadOnlyList<int> ProcessIds);
 
 /// <summary>
 /// How replacing one target went. With it replaced and not answering afterwards, the files
@@ -507,6 +518,61 @@ internal sealed class IisWebServer : IWebServer
             Run("start", "apppool", pool, alreadyDone: "already started");
         foreach (var site in sites)
             Run("start", "site", site, alreadyDone: "already started");
+    }
+
+    private readonly object _statesGate = new();
+    private IReadOnlyList<WebSiteState> _states = [];
+    private long _statesAt;
+
+    /// <summary>
+    /// What a listing gave as XML: the attributes of each element of a kind.
+    /// </summary>
+    private static List<Dictionary<string, string>> Rows(string what)
+    {
+        var (_, output) = Execute($"list {what} /xml");
+        var start = output.IndexOf("<appcmd", StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+            return [];
+        try
+        {
+            return [.. System.Xml.Linq.XDocument.Parse(output[start..]).Root!.Elements()
+                .Select(element => element.Attributes().ToDictionary(attribute => attribute.Name.LocalName, attribute => attribute.Value, StringComparer.OrdinalIgnoreCase))];
+        }
+        catch (System.Xml.XmlException)
+        {
+            return [];
+        }
+    }
+
+    public IReadOnlyList<WebSiteState> States()
+    {
+        lock (_statesGate)
+        {
+            // Four runs of the tool: not at every look.
+            if (_statesAt != 0 && Environment.TickCount64 - _statesAt < 10_000)
+                return _states;
+            try
+            {
+                var pools = Rows("apppool").ToDictionary(row => row.GetValueOrDefault("APPPOOL.NAME", ""), row => row.GetValueOrDefault("state", "").Equals("Started", StringComparison.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+                var workers = Rows("wp").GroupBy(row => row.GetValueOrDefault("APPPOOL.NAME", ""), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.Select(row => int.TryParse(row.GetValueOrDefault("WP.NAME"), out var id) ? id : 0).Where(id => id > 0).ToList(), StringComparer.OrdinalIgnoreCase);
+                var poolOf = Rows("app").Where(row => row.GetValueOrDefault("path", "/") == "/" || row.GetValueOrDefault("APP.NAME", "").EndsWith('/'))
+                    .GroupBy(row => row.GetValueOrDefault("SITE.NAME", ""), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.First().GetValueOrDefault("APPPOOL.NAME", ""), StringComparer.OrdinalIgnoreCase);
+                _states = [.. Rows("site").Select(row =>
+                {
+                    var name = row.GetValueOrDefault("SITE.NAME", "");
+                    var pool = poolOf.GetValueOrDefault(name, "");
+                    return new WebSiteState(name, row.GetValueOrDefault("state", "").Equals("Started", StringComparison.OrdinalIgnoreCase), pool, pools.GetValueOrDefault(pool), workers.GetValueOrDefault(pool) ?? []);
+                }).Where(site => site.Name.Length > 0)];
+            }
+            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+            {
+                _states = [];
+            }
+            _statesAt = Environment.TickCount64;
+            return _states;
+        }
     }
 
     public IReadOnlyList<int> ProcessIds(IReadOnlyList<string> sites)

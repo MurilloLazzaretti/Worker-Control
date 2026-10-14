@@ -530,6 +530,7 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
         {
             Databases = fast.Databases?.Where(database => Watched(config, database.Name)).ToList(),
             Sessions = fast.Sessions?.Where(group => Watched(config, group.Database)).ToList(),
+            Clients = fast.Clients?.Where(client => Watched(config, client.Database)).ToList(),
             Activity = activity
         };
     }

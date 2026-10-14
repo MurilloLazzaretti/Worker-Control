@@ -65,6 +65,19 @@ internal static class Queries
         """;
 
     /// <summary>
+    /// Who is connected, by the process that opened the connections: which machine, which
+    /// process on it, and for how long it has asked for nothing.
+    /// </summary>
+    public const string Clients = """
+        SELECT ISNULL(s.host_name, N''), ISNULL(s.host_process_id, 0), ISNULL(NULLIF(RTRIM(s.program_name), N''), N''), ISNULL(DB_NAME(s.database_id), N''),
+               COUNT(*), SUM(CASE WHEN s.status = N'running' THEN 1 ELSE 0 END),
+               ISNULL(DATEDIFF(SECOND, MAX(ISNULL(s.last_request_end_time, s.login_time)), GETDATE()), -1)
+        FROM sys.dm_exec_sessions s
+        WHERE s.is_user_process = 1 AND s.session_id <> @@SPID
+        GROUP BY ISNULL(s.host_name, N''), ISNULL(s.host_process_id, 0), ISNULL(NULLIF(RTRIM(s.program_name), N''), N''), ISNULL(DB_NAME(s.database_id), N'')
+        """;
+
+    /// <summary>
     /// What is running, and whoever keeps something else waiting even while doing nothing.
     /// </summary>
     public const string Activity = """
