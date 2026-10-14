@@ -233,6 +233,10 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
 
     public (string? Program, string? Folder) Wrapped(string name) => WrappedPrograms.GetValueOrDefault(name);
 
+    public Dictionary<string, string> WrappedArgumentsOf { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public string? WrappedArguments(string name) => WrappedArgumentsOf.GetValueOrDefault(name);
+
     public Dictionary<int, int> Listening { get; } = [];
 
     void IWebServer.Stop(IReadOnlyList<string> sites) => Did.Add("offline " + string.Join("+", sites));
@@ -538,6 +542,12 @@ public sealed class TargetCatalogTests : IDisposable
         Assert.Contains("conf/", targets["Proxy"].Keep);
         Assert.DoesNotContain("conf/", targets["Sockets"].Keep);
         Assert.Contains("does not say which program", targets["Silent"].Problem);
+
+        // The script given to a runtime says where the application is.
+        var app = Make("services", "socket-app");
+        File.WriteAllText(Path.Combine(app, "server.js"), "// app");
+        Assert.Equal(Path.Combine(app, "server.js"), TargetCatalog.ScriptOf($"--max-old-space-size=512 \"{Path.Combine(app, "server.js")}\" --port 3000"));
+        Assert.Null(TargetCatalog.ScriptOf("server.js --port 3000"));
     }
 
     [Fact]

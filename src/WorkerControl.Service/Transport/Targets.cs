@@ -104,9 +104,15 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
                     problem = "The service is run by a wrapper that does not say which program it runs: say the folder in \"Transport\".\"Targets\"";
                 else if (Shared(folder))
                 {
-                    // A runtime installed for everybody (node, java) is not the folder of the application.
-                    problem = $"The service runs {program} from {folder}, which is not the folder of an application: say it in \"Transport\".\"Targets\"";
-                    folder = null;
+                    // A runtime installed for everybody (node, java) is not the folder of the application; the script it is given is.
+                    var script = ScriptOf(services.WrappedArguments(watched.Name));
+                    if (script is not null && !Shared(Path.GetDirectoryName(script)!))
+                        folder = Path.GetDirectoryName(script);
+                    else
+                    {
+                        problem = $"The service runs {program} from {folder}, which is not the folder of an application: say it in \"Transport\".\"Targets\"";
+                        folder = null;
+                    }
                 }
                 else if (program is not null && Path.GetFileNameWithoutExtension(program).Equals("nginx", StringComparison.OrdinalIgnoreCase))
                     // The reverse proxy: its configuration, its pages in use and what it writes are of the environment.
@@ -207,6 +213,17 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
         }
 
         return [.. targets.OrderBy(target => target.Kind, StringComparer.Ordinal).ThenBy(target => target.Name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// The first file the arguments of a program name with a full path, and that is there.
+    /// </summary>
+    internal static string? ScriptOf(string? arguments)
+    {
+        if (string.IsNullOrWhiteSpace(arguments))
+            return null;
+        var tokens = System.Text.RegularExpressions.Regex.Matches(arguments, "\"([^\"]+)\"|(\\S+)").Select(match => match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value);
+        return tokens.FirstOrDefault(token => Path.IsPathFullyQualified(token) && File.Exists(token));
     }
 
     /// <summary>

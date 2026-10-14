@@ -71,6 +71,19 @@ internal sealed class WindowsServiceManager : IServiceManager
 
     public void Delete(string name) => Control("delete", name);
 
+    public string? WrappedArguments(string name)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{name}\Parameters");
+            return key?.GetValue("AppParameters") is string arguments && !string.IsNullOrWhiteSpace(arguments) ? Environment.ExpandEnvironmentVariables(arguments) : null;
+        }
+        catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return null;
+        }
+    }
+
     public (string? Program, string? Folder) Wrapped(string name)
     {
         try

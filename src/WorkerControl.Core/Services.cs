@@ -92,6 +92,11 @@ public interface IServiceManager
     (string? Program, string? Folder) Wrapped(string name) => (null, null);
 
     /// <summary>
+    /// The arguments the wrapper gives the program it runs: for a runtime (node), the script of the application.
+    /// </summary>
+    string? WrappedArguments(string name) => null;
+
+    /// <summary>
     /// Asks the service to start. Does not wait for it. Throws when the request is refused.
     /// </summary>
     void Start(string name);
