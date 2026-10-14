@@ -428,11 +428,14 @@ public sealed class DatabasePartsTests : IDisposable
 
         Assert.True(file.ProtectSecrets(protector));
 
-        var kept = ConfigReader.Parse(file.Read()).Database!.Password!;
+        // The database is of the environment: it went to its own file, and is protected there.
+        var kept = ConfigReader.Parse(file.ReadMerged()).Database!.Password!;
         Assert.StartsWith(Secret.Prefix, kept);
         Assert.Equal("typed", protector.Unprotect(kept));
-        Assert.DoesNotContain("typed", file.Read());
+        Assert.DoesNotContain("typed", file.ReadMerged());
+        Assert.DoesNotContain("Database", file.Read());
         Assert.False(File.Exists(file.Path + ".bak"));
+        Assert.False(File.Exists(file.EnvironmentPath + ".bak"));
         // Once protected, it is left alone.
         Assert.False(file.ProtectSecrets(protector));
     }

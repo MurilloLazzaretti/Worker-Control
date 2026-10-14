@@ -210,7 +210,8 @@ public class AdminTests
 
         var read = (await rig.CommandAsync("GetConfig"))!;
         Assert.Equal("Orders", (string?)read["Config"]!["WorkerGroups"]![0]!["Name"]);
-        Assert.Equal(rig.ConfigText(), (string?)read["Text"]);
+        // The file of the supervisor alone: the environment has its own.
+        Assert.Equal(File.ReadAllText(Path.Combine(rig.Directory, "ConfigWorkers.json")), (string?)read["Text"]);
 
         var before = rig.ConfigText();
         var bad = (JObject)read["Config"]!.DeepClone();

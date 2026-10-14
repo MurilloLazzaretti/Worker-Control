@@ -93,6 +93,8 @@ The folder `publish/win-x64` now has the two files the service needs:
 
 ## ⚡️ Configuration
 
+The configuration is in two files in the data folder. `ConfigWorkers.json` is of the supervisor: where the broker is, the groups and the Windows services it looks after. `Environment.json` is of the environment: `Database`, `Transport`, `Traffic`, `Frontends` and `Proxy`. Any of those sections found in `ConfigWorkers.json` (left by an older version, or written there by hand) is moved to `Environment.json` the next time the configuration is read, the previous version of each file kept as `.bak`. Both are read as one; the sections below are shown as they are written, in whichever file they go.
+
 The settings are in `ConfigWorkers.json`, in the same folder as `WorkerControl.exe`. A sample is in the repository root.
 
 ```json

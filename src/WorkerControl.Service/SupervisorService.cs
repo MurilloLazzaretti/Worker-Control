@@ -223,8 +223,9 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         {
             try
             {
+                Separate();
                 ProtectSecrets();
-                var text = _file.Read();
+                var text = _file.ReadMerged();
                 var config = ConfigReader.Parse(text);
                 _appliedText = text;
                 return config;
@@ -246,6 +247,22 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// What is of the environment goes to its own file, wherever it was written.
+    /// </summary>
+    private void Separate()
+    {
+        try
+        {
+            if (_file.Separate())
+                _logger.LogInformation("What is of the environment was moved from {File} to {Environment}", ConfigFile.Name, ConfigFile.EnvironmentName);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or Newtonsoft.Json.JsonException or ConfigException)
+        {
+            // Whatever is wrong with the files is said by whoever reads them next.
+        }
     }
 
     /// <summary>
@@ -273,9 +290,10 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         WorkerControlConfig config;
         try
         {
-            text = _file.Read();
+            Separate();
+            text = _file.ReadMerged();
             if (text != _appliedText && ProtectSecrets())
-                text = _file.Read();
+                text = _file.ReadMerged();
             if (text == _appliedText)
                 return;
             config = ConfigReader.Parse(text);
@@ -769,6 +787,45 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                     answer["Text"] = text;
                     answer["Config"] = JObject.Parse(text);
                 });
+            }
+
+            case "GetEnvironment":
+            {
+                var text = _file.ReadEnvironment();
+                return Admin.Ok(answer =>
+                {
+                    answer["Text"] = text;
+                    answer["Config"] = JObject.Parse(text);
+                    answer["File"] = _file.EnvironmentPath;
+                });
+            }
+
+            case "SetEnvironment":
+            {
+                var given = request["Config"];
+                var text = given switch
+                {
+                    JObject asObject => asObject.ToString(Newtonsoft.Json.Formatting.Indented),
+                    JValue { Type: JTokenType.String } asText => (string)asText!,
+                    _ => null
+                };
+                if (text is null)
+                    return Admin.Error("invalid-request", "\"Config\" must be the settings of the environment, as an object or as text");
+                try
+                {
+                    _file.WriteEnvironment(text);
+                }
+                catch (ConfigException error)
+                {
+                    return Admin.Error("invalid-config", error.Message);
+                }
+                catch (Newtonsoft.Json.JsonException error)
+                {
+                    return Admin.Error("invalid-config", error.Message);
+                }
+                Record(EventKind.ManualAction, "settings of the environment replaced" + by);
+                Interlocked.Exchange(ref _reloadRequested, 1);
+                return Admin.Ok();
             }
 
             case "SetConfig":

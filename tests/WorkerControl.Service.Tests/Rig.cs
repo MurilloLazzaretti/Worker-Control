@@ -207,7 +207,11 @@ public sealed class Rig : IAsyncDisposable
     /// </summary>
     public bool Publish(string queue, object body) => _admin.SendMessage(queue, body);
 
-    public string ConfigText() => File.ReadAllText(Path.Combine(Directory, "ConfigWorkers.json"));
+    /// <summary>
+    /// The configuration as the service reads it: its own file and the one of the environment.
+    /// </summary>
+    public string ConfigText() => ConfigFile.Merge(File.ReadAllText(Path.Combine(Directory, "ConfigWorkers.json")),
+        File.Exists(Path.Combine(Directory, ConfigFile.EnvironmentName)) ? File.ReadAllText(Path.Combine(Directory, ConfigFile.EnvironmentName)) : "{}");
 
     public async Task<bool> ReloadConfigAsync()
     {
