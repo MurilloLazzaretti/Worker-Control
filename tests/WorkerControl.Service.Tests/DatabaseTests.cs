@@ -874,9 +874,9 @@ public sealed class SqlApplyTests
     [Fact]
     public void A_drop_is_written_from_the_name_and_never_from_the_package()
     {
-        Assert.Equal("DROP PROCEDURE [dbo].[sp]]Odd];", SqlApply.Drop("Procedure", "P", "dbo", "sp]Odd"));
-        Assert.Equal("DROP TYPE [dbo].[List];", SqlApply.Drop("Type", "TT", "dbo", "List"));
-        Assert.Throws<ArgumentException>(() => SqlApply.Drop("Database", null, "dbo", "x"));
+        Assert.Equal("DROP PROCEDURE [dbo].[sp]]Odd];", SqlApply.Drop("Procedure", "dbo", "sp]Odd"));
+        Assert.Equal("DROP TYPE [dbo].[List];", SqlApply.Drop("Type", "dbo", "List"));
+        Assert.Throws<ArgumentException>(() => SqlApply.Drop("Database", "dbo", "x"));
     }
 }
 

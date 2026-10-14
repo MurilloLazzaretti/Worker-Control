@@ -104,7 +104,7 @@ internal static partial class SqlApply
         return script[..verb.Index] + (alter ? "ALTER" : "CREATE") + script[(verb.Index + verb.Length)..];
     }
 
-    public static string Drop(string kind, string? variety, string schema, string name)
+    public static string Drop(string kind, string schema, string name)
     {
         var what = kind switch
         {

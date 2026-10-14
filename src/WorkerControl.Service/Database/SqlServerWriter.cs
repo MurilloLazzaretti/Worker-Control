@@ -79,7 +79,7 @@ internal sealed class SqlServerWriter : IDatabaseWriter
         var exists = await Exists(sql, kind, schema, name, stopping);
 
         if (request.Action == "Drop")
-            return exists ? ("dropped", [SqlApply.Drop(kind, request.Variety, schema, name)]) : ("absent", []);
+            return exists ? ("dropped", [SqlApply.Drop(kind, schema, name)]) : ("absent", []);
 
         if (request.Action != "Define")
             throw new Refusal($"The action {request.Action} is not known");

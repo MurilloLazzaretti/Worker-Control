@@ -178,10 +178,6 @@ internal sealed class ConfigFile(string directory)
     }
 
     /// <summary>
-    /// Changes one group and leaves everything else in the file as it is. False when there is
-    /// no such group.
-    /// </summary>
-    /// <summary>
     /// Changes one section at the root of the file, making it when it is not there, and leaves
     /// everything else as it is.
     /// </summary>
@@ -239,6 +235,10 @@ internal sealed class ConfigFile(string directory)
         }
     }
 
+    /// <summary>
+    /// Changes one group and leaves everything else in the file as it is. False when there is
+    /// no such group.
+    /// </summary>
     public bool ChangeGroup(string group, Action<JObject> change)
     {
         lock (_gate)

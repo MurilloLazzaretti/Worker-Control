@@ -390,9 +390,6 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
     }
 
     /// <summary>
-    /// Stops whatever runs from the folder. Gives the groups that were on, to turn those on again and no other.
-    /// </summary>
-    /// <summary>
     /// Stops whatever runs from the folder of a target, to take it away.
     /// </summary>
     public Task<IReadOnlyList<string>> StopAsync(DeployTarget target, bool force, Action<string> did, CancellationToken stopping) => Stop(target, did, force, stopping);
@@ -423,6 +420,9 @@ internal sealed class Deployer(IGroupSwitch groups, IServiceManager services, IW
         }
     }
 
+    /// <summary>
+    /// Stops whatever runs from the folder. Gives the groups that were on, to turn those on again and no other.
+    /// </summary>
     private async Task<IReadOnlyList<string>> Stop(DeployTarget target, Action<string> did, bool force, CancellationToken stopping)
     {
         switch (target.Kind)

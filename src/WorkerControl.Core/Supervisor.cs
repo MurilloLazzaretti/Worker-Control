@@ -385,7 +385,7 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
                 var answeredAt = time.GetUtcNow();
                 _inbox.Enqueue(() => KeepAliveAnswered(group, worker, now, answeredAt));
             },
-            () => _inbox.Enqueue(() => KeepAliveExpired(group, worker, now)));
+            () => _inbox.Enqueue(() => KeepAliveExpired(worker, now)));
 
         if (sent)
             worker.KeepAlivePending = true;
@@ -409,7 +409,7 @@ public sealed class Supervisor(IProcessHost host, IBroker broker, TimeProvider t
         }
     }
 
-    private void KeepAliveExpired(Group group, Worker worker, DateTimeOffset sentAt)
+    private void KeepAliveExpired(Worker worker, DateTimeOffset sentAt)
     {
         if (worker.Gone || worker.KeepAliveSentAt != sentAt)
             return;

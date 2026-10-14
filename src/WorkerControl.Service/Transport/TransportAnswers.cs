@@ -234,7 +234,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         foreach (var item in inboxes.Properties())
         {
             var kind = item.Name.ToLowerInvariant();
-            if (!Kinds.Contains(kind) || item.Value.Type is not (JTokenType.String or JTokenType.Null))
+            if (!Kinds.Contains(kind) || item.Value?.Type is not (JTokenType.String or JTokenType.Null))
                 return Admin.Error("invalid-request", "\"Inboxes\" takes worker, service, api and frontend, each with the path of a folder");
             var path = ((string?)item.Value ?? "").Trim();
             if (path.Length > 0 && !Path.IsPathFullyQualified(path))

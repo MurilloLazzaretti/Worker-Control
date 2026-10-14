@@ -293,7 +293,7 @@ public sealed class TrafficTests : IDisposable
         var hour = Assert.Single(hours);
         Assert.Equal(3, hour.Tally.Count);
         Assert.Equal(1, hour.Tally.S5);
-        Assert.Empty(_store.Query(ancient.AddHours(-1), ancient.AddHours(1), new TrafficFilter(), []).Where(row => row.Tally.Count > 0));
+        Assert.DoesNotContain(_store.Query(ancient.AddHours(-1), ancient.AddHours(1), new TrafficFilter(), []), row => row.Tally.Count > 0);
         Assert.Equal(1, Total().Count);
     }
 
