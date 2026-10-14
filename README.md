@@ -399,6 +399,8 @@ Leave `depend= ZapMQ` out when ZapMQ runs on another machine, and replace `ZapMQ
 
 The service runs under the Local System account, and so does every application it starts. The names above are the ones 1.x used, which Management Studio 1.x looks for.
 
+When the machine is shut down or restarted, Windows tells the service before the other services (the preshutdown) and waits for it up to 3 minutes: the workers are asked to leave and, past their safe-stop timeout, ended, as in a stop asked by hand, while ZapMQ is still running. Without that, every service would be told at once and given a few seconds, and the workers would be cut in the middle of what they were doing.
+
 When 1.x is installed on the machine, take it out with `sc.exe delete` and by deleting its folder, never with its uninstaller (`unins000.exe`): the service has the same name in both versions, and the uninstaller of 1.x stops and deletes the service of 2.x.
 
 3. Check that it is running:

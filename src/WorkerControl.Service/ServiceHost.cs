@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Hosting.WindowsServices;
 using System.Reflection;
 using Serilog;
 using Serilog.Events;
@@ -25,6 +26,9 @@ public static class ServiceHost
         var options = section.Get<ServiceOptions>() ?? new ServiceOptions();
 
         builder.Services.AddWindowsService(service => service.ServiceName = "WorkerControlService");
+        // Told ahead of a shutdown of the machine, to stop the workers while ZapMQ is still there.
+        if (OperatingSystem.IsWindows() && WindowsServiceHelpers.IsWindowsService())
+            builder.Services.AddSingleton<IHostLifetime, ServiceLifetime>();
 
         // Asking every worker to leave, and waiting for them, takes longer than the default.
         builder.Services.Configure<HostOptions>(host => host.ShutdownTimeout = TimeSpan.FromMinutes(3));
