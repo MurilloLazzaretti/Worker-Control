@@ -71,6 +71,22 @@ internal sealed class WindowsServiceManager : IServiceManager
 
     public void Delete(string name) => Control("delete", name);
 
+    public (string? Program, string? Folder) Wrapped(string name)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey($@"SYSTEM\CurrentControlSet\Services\{name}\Parameters");
+            var program = key?.GetValue("Application") as string;
+            var folder = key?.GetValue("AppDirectory") as string;
+            return (string.IsNullOrWhiteSpace(program) ? null : Environment.ExpandEnvironmentVariables(program.Trim().Trim('"')),
+                string.IsNullOrWhiteSpace(folder) ? null : Environment.ExpandEnvironmentVariables(folder.Trim().Trim('"')));
+        }
+        catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return (null, null);
+        }
+    }
+
     /// <summary>
     /// The service control tool of Windows, which is how a service is registered and unregistered.
     /// </summary>

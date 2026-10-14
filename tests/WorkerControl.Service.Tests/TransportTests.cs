@@ -226,6 +226,13 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
         Services.Remove(name);
     }
 
+    /// <summary>
+    /// What a wrapper says it runs, by service.
+    /// </summary>
+    public Dictionary<string, (string? Program, string? Folder)> WrappedPrograms { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public (string? Program, string? Folder) Wrapped(string name) => WrappedPrograms.GetValueOrDefault(name);
+
     public Dictionary<int, int> Listening { get; } = [];
 
     void IWebServer.Stop(IReadOnlyList<string> sites) => Did.Add("offline " + string.Join("+", sites));
@@ -505,6 +512,35 @@ public sealed class TargetCatalogTests : IDisposable
     }
 
     [Fact]
+    public void What_a_wrapper_runs_is_told_by_the_wrapper_itself()
+    {
+        var machine = new PretendMachine();
+        var nssm = Path.Combine(Make("tools"), "nssm.exe");
+        var proxy = Make("nginx");
+        var sockets = Make("services", "sockets");
+        machine.Services["Proxy"] = new InstalledService("Proxy", "Proxy", nssm, ServiceState.Running, "Automatic", 3, 0);
+        machine.Services["Sockets"] = new InstalledService("Sockets", "Sockets", nssm, ServiceState.Running, "Automatic", 4, 0);
+        machine.Services["Silent"] = new InstalledService("Silent", "Silent", nssm, ServiceState.Running, "Automatic", 5, 0);
+        machine.WrappedPrograms["Proxy"] = (Path.Combine(proxy, "nginx.exe"), null);
+        machine.WrappedPrograms["Sockets"] = ("node.exe", sockets);
+        var config = ConfigReader.Parse("""
+            { "ZapMQHost": "localhost", "ZapMQPort": 5679, "WorkerGroups": [],
+              "Services": { "Items": [ { "Name": "Proxy" }, { "Name": "Sockets" }, { "Name": "Silent" } ] } }
+            """);
+
+        var targets = new TargetCatalog(() => config, machine, machine, () => []).All().ToDictionary(target => target.Name);
+
+        // Without a folder of its own, the one of the program; the folder the wrapper says, when it says one.
+        Assert.Equal(proxy, targets["Proxy"].Paths.Single());
+        Assert.Equal(sockets, targets["Sockets"].Paths.Single());
+        Assert.Null(targets["Sockets"].Problem);
+        // The configuration of the proxy, and what it writes, are never replaced.
+        Assert.Contains("conf/", targets["Proxy"].Keep);
+        Assert.DoesNotContain("conf/", targets["Sockets"].Keep);
+        Assert.Contains("does not say which program", targets["Silent"].Problem);
+    }
+
+    [Fact]
     public void The_targets_are_worked_out_from_what_the_service_already_knows()
     {
         var workers = Make("workers", "orders");
@@ -553,6 +589,7 @@ public sealed class TargetCatalogTests : IDisposable
         Assert.Contains("not installed", targets["service:Missing"].Problem);
         // A wrapper says nothing of where the program is; the configuration does.
         Assert.Null(targets["service:Wrapped"].Problem);
+
         Assert.EndsWith(Path.Combine("services", "wrapped"), targets["service:Wrapped"].Paths.Single());
         Assert.Equal(["*.ini"], targets["service:Wrapped"].Keep);
         Assert.Equal(TransportConfig.DefaultKeep, targets["service:Sockets"].Keep);

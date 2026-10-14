@@ -92,13 +92,32 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
             var executable = installed?.ExecutablePath;
             var wrapped = executable is not null && Path.GetFileNameWithoutExtension(executable).Equals("nssm", StringComparison.OrdinalIgnoreCase);
             var folder = executable is null || wrapped ? null : Path.GetDirectoryName(executable);
-            targets.Add(new DeployTarget("service", watched.Name, folder is null ? [] : [folder], keep)
+            string? problem = null;
+            var serviceKeep = keep;
+            if (wrapped)
+            {
+                // The wrapper keeps what it runs, and from where.
+                var (program, directory) = services.Wrapped(watched.Name);
+                executable = program;
+                folder = directory ?? (program is null ? null : Path.GetDirectoryName(program));
+                if (folder is null)
+                    problem = "The service is run by a wrapper that does not say which program it runs: say the folder in \"Transport\".\"Targets\"";
+                else if (Shared(folder))
+                {
+                    // A runtime installed for everybody (node, java) is not the folder of the application.
+                    problem = $"The service runs {program} from {folder}, which is not the folder of an application: say it in \"Transport\".\"Targets\"";
+                    folder = null;
+                }
+                else if (program is not null && Path.GetFileNameWithoutExtension(program).Equals("nginx", StringComparison.OrdinalIgnoreCase))
+                    // The reverse proxy: its configuration, its pages in use and what it writes are of the environment.
+                    serviceKeep = [.. keep, "conf/", "temp/", "logs/", "*.pid"];
+            }
+            targets.Add(new DeployTarget("service", watched.Name, folder is null ? [] : [folder], serviceKeep)
             {
                 Service = watched.Name,
-                Version = wrapped ? null : VersionOf(executable),
+                Version = VersionOf(executable),
                 Problem = installed is null ? "The service is not installed on this machine"
-                    : wrapped ? "The service is run by a wrapper: say the folder of the program in \"Transport\".\"Targets\""
-                    : folder is null ? "The folder of the service could not be told" : null
+                    : problem ?? (folder is null ? "The folder of the service could not be told" : null)
             });
         }
 
@@ -188,6 +207,18 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
         }
 
         return [.. targets.OrderBy(target => target.Kind, StringComparer.Ordinal).ThenBy(target => target.Name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// A folder of the system or of what is installed for everybody, where no application of the environment lives.
+    /// </summary>
+    private static bool Shared(string folder)
+    {
+        var full = Folder(folder);
+        return new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.Windows }
+            .Select(Environment.GetFolderPath)
+            .Where(path => path.Length > 0)
+            .Any(path => full.StartsWith(Folder(path), StringComparison.OrdinalIgnoreCase));
     }
 
     internal static string ApplicationName(string path)

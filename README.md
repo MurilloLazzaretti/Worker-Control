@@ -201,6 +201,8 @@ Services of the machine that are not started by Worker Control can be watched by
 | `Check` | none | `Tcp` (a host and port that has to take a connection) or `Url` (an address that has to answer 2xx), tried every 15 seconds while the service runs |
 | `LogFiles` | none | Folder and file name pattern of the log of the service |
 
+A service run through a wrapper (nssm) is replaced in the folder of the program the wrapper runs, read from the wrapper's own settings (`AppDirectory`, or the folder of `Application`). A program installed for everybody (in Program Files or Windows) is not taken for the folder of an application: then the folder is said in `Transport.Targets`. For nginx, its configuration and what it writes (`conf/`, `temp/`, `logs/`) are never replaced.
+
 ### Traffic
 
 The traffic through a reverse proxy can be measured from its access log, without touching any application: how many requests, how fast and with how many errors, by application, endpoint and instance.

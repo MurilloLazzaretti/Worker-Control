@@ -86,6 +86,12 @@ public interface IServiceManager
     void Delete(string name) => throw new InvalidOperationException("Services can only be unregistered on Windows");
 
     /// <summary>
+    /// For a service that runs another program through a wrapper (nssm): that program and the
+    /// folder it runs in, as the wrapper keeps them. Nulls when it says nothing of it.
+    /// </summary>
+    (string? Program, string? Folder) Wrapped(string name) => (null, null);
+
+    /// <summary>
     /// Asks the service to start. Does not wait for it. Throws when the request is refused.
     /// </summary>
     void Start(string name);
