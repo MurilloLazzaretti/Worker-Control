@@ -521,10 +521,23 @@ internal sealed class IisWebServer : IWebServer
         return ids;
     }
 
+    /// <summary>
+    /// What a listing gave, one name on each line. With nothing to list the tool says nothing, and ends as if it had failed.
+    /// </summary>
+    private static List<string> Listed(string arguments) =>
+        [.. Execute(arguments).Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(line => !line.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))];
+
+    private static bool PoolInUse(string pool) => Listed($"list app /apppool.name:\"{pool}\" /text:APP.NAME").Count > 0;
+
     public void CreateSite(string name, int port, string folder)
     {
+        // A pool of that name that nothing runs in is taken as it is; one that is in use belongs to something else.
+        var had = Listed($"list apppool \"{name}\" /text:name").Count > 0;
+        if (had && PoolInUse(name))
+            throw new InvalidOperationException($"There is already an application pool called {name}, and something else runs in it");
         // No managed code: what it serves brings its own runtime.
-        Must($"add apppool /name:\"{name}\" /managedRuntimeVersion:\"\"");
+        if (!had)
+            Must($"add apppool /name:\"{name}\" /managedRuntimeVersion:\"\"");
         try
         {
             Must($"add site /name:\"{name}\" /bindings:http/*:{port}: /physicalPath:\"{folder}\"");
@@ -540,7 +553,8 @@ internal sealed class IisWebServer : IWebServer
         }
         catch (InvalidOperationException)
         {
-            Execute($"delete apppool \"{name}\"");
+            if (!had)
+                Execute($"delete apppool \"{name}\"");
             throw;
         }
     }
@@ -549,13 +563,9 @@ internal sealed class IisWebServer : IWebServer
     {
         var pools = Pools([name]);
         Must($"delete site \"{name}\"");
-        foreach (var pool in pools)
-        {
-            // A pool something else still runs in stays.
-            var (code, output) = Execute($"list app /apppool.name:\"{pool}\" /text:APP.NAME");
-            if (code == 0 && string.IsNullOrWhiteSpace(output))
-                Must($"delete apppool \"{pool}\"");
-        }
+        // A pool something else still runs in stays.
+        foreach (var pool in pools.Where(pool => !PoolInUse(pool)))
+            Must($"delete apppool \"{pool}\"");
     }
 
     private static void Must(string arguments)
