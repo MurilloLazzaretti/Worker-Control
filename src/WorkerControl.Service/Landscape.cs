@@ -17,12 +17,20 @@ internal static class Landscape
         var states = web.States().ToDictionary(site => site.Name, StringComparer.OrdinalIgnoreCase);
         var ports = network.Sites().GroupBy(site => site.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(group => group.Key, group => group.First().Port, StringComparer.OrdinalIgnoreCase);
 
+        // An application often runs as a process of its own, started by the worker process of the web
+        // server from the folder of the site: that one is who talks to the broker and to the database.
+        var processes = network.Processes();
+        List<int> RunningFrom(IReadOnlyList<string> folders) =>
+            [.. processes.Where(process => process.Path is not null && folders.Any(folder =>
+                process.Path.Replace('/', '\\').StartsWith(folder.Replace('/', '\\').TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))).Select(process => process.ProcessId)];
+
         answer["Machine"] = Environment.MachineName;
         answer["Apis"] = new JArray(catalog.All().Where(target => target.Kind == "api").Select(target => new JObject
         {
             ["Name"] = target.Name,
             ["Folder"] = target.Paths.FirstOrDefault(),
             ["Version"] = target.Version,
+            ["ProcessIds"] = new JArray(RunningFrom(target.Paths)),
             // Null where the web server does not say how a site stands.
             ["Sites"] = new JArray(target.Sites.Select(site => new JObject
             {

@@ -236,7 +236,9 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
 
     public MachineProcess? Process(int processId) => null;
 
-    public IReadOnlyList<MachineProcess> Processes() => [];
+    public List<MachineProcess> Running { get; } = [];
+
+    public IReadOnlyList<MachineProcess> Processes() => Running;
 
     public IReadOnlyList<WebSite> Sites() => WebSites;
 }

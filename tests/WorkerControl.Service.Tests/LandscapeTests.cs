@@ -35,6 +35,8 @@ public class LandscapeTests
         machine.WebSites.Add(new WebSite("Shop Api Orders 2", 9002, folder));
         machine.StoppedSites.Add("Shop Api Orders 2");
         machine.Serving["Shop Api Orders 1"] = [7001];
+        machine.Running.Add(new MachineProcess(7100, "Orders.Api", Path.Combine(folder, "Orders.Api.exe")));
+        machine.Running.Add(new MachineProcess(7200, "Other", Path.Combine(rig.Directory, "www", "OrdersOld", "Other.exe")));
         rig.Services = machine;
         rig.Register = services =>
         {
@@ -52,6 +54,8 @@ public class LandscapeTests
 
         var api = Assert.Single(seen!["Apis"]!);
         Assert.Equal(("Orders", folder), ((string?)api["Name"], (string?)api["Folder"]));
+        // What runs from the folder of the application is its own, whoever started it.
+        Assert.Equal([7100], api["ProcessIds"]!.Select(id => (int)id));
         Assert.Equal([("Shop Api Orders 1", 9001, true, 1), ("Shop Api Orders 2", 9002, false, 0)],
             api["Sites"]!.Select(site => ((string?)site["Name"], (int)site["Port"]!, (bool)site["Started"]!, site["ProcessIds"]!.Count())));
         Assert.Equal(Environment.MachineName, (string?)seen["Machine"]);
