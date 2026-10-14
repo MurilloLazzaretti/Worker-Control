@@ -544,6 +544,9 @@ internal sealed class IisWebServer : IWebServer
             try
             {
                 Must($"set app \"{name}/\" /applicationPool:\"{name}\"");
+                // A pool that was already there may have been left stopped.
+                Run("start", "apppool", name, alreadyDone: "already started");
+                Run("start", "site", name, alreadyDone: "already started");
             }
             catch (InvalidOperationException)
             {
