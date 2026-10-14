@@ -65,6 +65,53 @@ internal static class Downloads
     }
 
     /// <summary>
+    /// The types the reverse proxy needs to say for the files it serves from a folder of downloads.
+    /// </summary>
+    private static readonly Dictionary<string, string> Types = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["apk"] = "application/vnd.android.package-archive",
+        ["aab"] = "application/octet-stream",
+        ["ipa"] = "application/octet-stream",
+        ["exe"] = "application/octet-stream",
+        ["msi"] = "application/x-msi",
+        ["zip"] = "application/zip",
+        ["pdf"] = "application/pdf"
+    };
+
+    /// <summary>
+    /// Makes the folder ready to be served: the folder itself and an empty list of versions,
+    /// leaving alone whatever is there. Gives what the reverse proxy needs to serve it under
+    /// <c>/name/</c>, to be put in its configuration by whoever looks after it.
+    /// </summary>
+    public static (bool Created, string Snippet) Prepare(string name, string root, string files, string versionsFile)
+    {
+        var created = !Directory.Exists(root);
+        Directory.CreateDirectory(root);
+        if (!File.Exists(Path.Combine(root, versionsFile)))
+            File.WriteAllText(Path.Combine(root, versionsFile), new JObject { ["apps"] = new JArray() }.ToString(Formatting.Indented));
+
+        var extension = Path.GetExtension(files).TrimStart('.');
+        var type = Types.GetValueOrDefault(extension, "application/octet-stream");
+        var folder = Path.GetFullPath(root).Replace('\\', '/').TrimEnd('/') + "/";
+        var path = "/" + string.Concat(name.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-')) + "/";
+        var snippet = $$"""
+            # Files to download: {{name}}
+            location {{path}} {
+                alias {{folder}};
+                types {
+                    {{type}} {{(extension is "" or "*" ? "bin" : extension)}};
+                    application/json json;
+                }
+                default_type application/octet-stream;
+                autoindex off;
+                # Asked again each time, so that a new version and the list of versions are seen at once.
+                add_header Cache-Control "no-cache";
+            }
+            """;
+        return (created, snippet);
+    }
+
+    /// <summary>
     /// A name a file can have in the folder: no path, no wildcard, and of the kind the folder distributes.
     /// </summary>
     public static bool Fits(string file, string pattern) =>

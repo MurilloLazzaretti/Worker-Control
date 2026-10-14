@@ -278,6 +278,8 @@ A folder of files that are only downloaded, served by a site of the web server (
 
 The version of a file is the one given when it was uploaded, carried by the package.
 
+`DownloadPrepare` (`Name`, `Root`, `Files`, `VersionsFile`) makes a folder ready to be served by the reverse proxy: it creates the folder and an empty list of versions when they are not there, and answers the `location` block that serves the folder under `/name/` with the type of its files, to be put in the configuration of the proxy.
+
 ### Database
 
 The one database instance the applications of the machine use can be watched too: whether it

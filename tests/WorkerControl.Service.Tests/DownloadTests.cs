@@ -86,4 +86,22 @@ public sealed class DownloadTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_folder, "app-stock.apk")));
         Assert.DoesNotContain(Versions(), app => (string?)app["file"] == "app-stock.apk");
     }
+
+    [Fact]
+    public void A_folder_is_made_ready_to_be_served_by_the_reverse_proxy_without_touching_what_is_there()
+    {
+        var folder = Path.Combine(_root, "www", "Phones");
+        var (created, snippet) = Downloads.Prepare("Phones", folder, "*.apk", "versions.json");
+
+        Assert.True(created);
+        Assert.Equal("{\n  \"apps\": []\n}", File.ReadAllText(Path.Combine(folder, "versions.json")).ReplaceLineEndings("\n"));
+        Assert.Contains("location /phones/ {", snippet);
+        Assert.Contains($"alias {folder.Replace('\\', '/')}/;", snippet);
+        Assert.Contains("application/vnd.android.package-archive apk;", snippet);
+
+        // Ready already, it is left as it is.
+        File.WriteAllText(Path.Combine(folder, "versions.json"), "{ \"apps\": [ { \"file\": \"a.apk\" } ] }");
+        Assert.False(Downloads.Prepare("Phones", folder, "*.apk", "versions.json").Created);
+        Assert.Contains("a.apk", File.ReadAllText(Path.Combine(folder, "versions.json")));
+    }
 }

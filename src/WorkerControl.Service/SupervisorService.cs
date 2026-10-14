@@ -790,6 +790,31 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 });
             }
 
+            case "DownloadPrepare":
+            {
+                var name = request.Value<string>("Name")?.Trim();
+                var root = request.Value<string>("Root")?.Trim();
+                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(root) || !Path.IsPathFullyQualified(root))
+                    return Admin.Error("invalid-request", "\"Name\" and a full path in \"Root\" are required");
+                try
+                {
+                    var (created, snippet) = Transport.Downloads.Prepare(name, root, request.Value<string>("Files") is { Length: > 0 } files ? files : "*.apk",
+                        request.Value<string>("VersionsFile") is { Length: > 0 } versions ? versions : "versions.json");
+                    if (created)
+                        Record(EventKind.ManualAction, $"folder of downloads {name} created in {root}" + by);
+                    return Admin.Ok(answer =>
+                    {
+                        answer["Created"] = created;
+                        answer["Folder"] = root;
+                        answer["Snippet"] = snippet;
+                    });
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    return Admin.Error("failed", $"The folder {root} could not be made ready: {error.Message}");
+                }
+            }
+
             case "GetEnvironment":
             {
                 var text = _file.ReadEnvironment();
