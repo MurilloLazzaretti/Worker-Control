@@ -383,6 +383,8 @@ proxy is asked to read it again (`nginx -s reload`) or its service is restarted.
 
 ## ⚙️ Installation
 
+The whole path of bringing ZapMQ 2 and Worker Control 2 to an environment, including replacing a 1.x installation in use, is in [the installation guide of ZapMQ](https://github.com/MurilloLazzaretti/ZapMQ/blob/main/docs/INSTALACAO.md) (in Portuguese). What follows is Worker Control alone.
+
 Run the commands in a PowerShell window opened as administrator. The examples use the folder `C:\WorkerControl`.
 
 1. Copy `WorkerControl.exe`, `e_sqlite3.dll` and your `ConfigWorkers.json` to `C:\WorkerControl`. If you use Management Studio, it goes in the same folder: it edits that same file.
