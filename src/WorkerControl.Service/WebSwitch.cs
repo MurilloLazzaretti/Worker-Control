@@ -31,14 +31,21 @@ internal sealed class WebSwitch(Func<WorkerControlConfig?> config, ProxyWork pro
         if (app.Serve == "proxy")
             return text + $"location / {{\n    proxy_pass {app.ProxyTo};\n    proxy_http_version 1.1;\n    proxy_set_header Host $host;\n    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n}}\n";
 
+        const string never = "add_header Cache-Control \"no-cache, no-store, must-revalidate\" always;";
+        const string forever = "add_header Cache-Control \"public, max-age=31536000, immutable\";";
         text += $"root {Quoted(Path.TrimEndingDirectorySeparator(app.Root))};\nindex index.html;\n\n" +
-                "# The page and the files that say where everything else is are never kept by the browser.\n" +
-                "location = /index.html {\n    add_header Cache-Control \"no-cache\";\n}\n" +
-                "location ~ ^/assets/[^/]+\\.json$ {\n    add_header Cache-Control \"no-cache\";\n}\n";
+                "# The page and the files that say where everything else is: asked again each time.\n" +
+                $"location = /index.html {{\n    {never}\n}}\n" +
+                $"location ~ ^/assets/[^/]+\\.json$ {{\n    try_files $uri =404;\n    {never}\n}}\n";
         if (app.Mode == "mfe")
-            text += "location ~ ^/mfe/[^/]+/(remoteEntry\\.js|version\\.json)$ {\n    add_header Cache-Control \"no-cache\";\n}\n";
+            text += "\n# One folder per module; its entry and its versions have no hash in the name.\n" +
+                    $"location ^~ /mfe/ {{\n    try_files $uri =404;\n    {forever}\n" +
+                    $"    location ~ /(remoteEntry\\.js|version\\.json)$ {{\n        try_files $uri =404;\n        {never}\n    }}\n}}\n";
+        // Named after what is in them: a new build brings new names.
+        text += "\n# Files whose names change with each build: kept by the browser.\n" +
+                $"location ~* \\.(?:css|js|ico|gif|jpe?g|png|webp|woff2?|eot|ttf|svg)$ {{\n    try_files $uri =404;\n    {forever}\n}}\n";
         // An address of the application itself (a route of it) is answered with its page.
-        return text + "\nlocation / {\n    try_files $uri $uri/ /index.html;\n}\n";
+        return text + $"\nlocation / {{\n    try_files $uri $uri/ /index.html;\n    {never}\n}}\n";
     }
 
     /// <summary>
