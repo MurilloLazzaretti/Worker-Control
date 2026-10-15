@@ -69,11 +69,23 @@ internal static class FileSet
         {
             if (IsKept(relative, keep))
                 continue;
-            using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            entries.Add(new FileEntry(relative, stream.Length, Hash(stream)));
+            var info = new FileInfo(full);
+            // A file that did not change since it was last read is not read again.
+            var mark = (full, info.Length, info.LastWriteTimeUtc);
+            if (!Hashes.TryGetValue(mark, out var hash))
+            {
+                using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                hash = Hash(stream);
+                if (Hashes.Count > 200_000)
+                    Hashes.Clear();
+                Hashes[mark] = hash;
+            }
+            entries.Add(new FileEntry(relative, info.Length, hash));
         }
         return entries;
     }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Path, long Size, DateTime Written), string> Hashes = new();
 
     /// <summary>
     /// Packs the files of a folder that are not kept, at the root of the zip.

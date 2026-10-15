@@ -937,6 +937,12 @@ public class DatabaseAdminTests
         Assert.Equal(0, (await rig.CommandAsync("DatabaseChanges"))!.Value<int>("Total"));
         Assert.Equal("not-found", (await rig.CommandAsync("DatabaseChange", request => request["Id"] = 99))!["Error"]!.Value<string>("Code"));
 
+        // Every object with its fingerprint, to compare with another environment.
+        var inventory = await rig.CommandAsync("DatabaseInventory");
+        Assert.Equal(("Sales", 6), (inventory!.Value<string>("Database"), ((JArray)inventory["Objects"]!).Count));
+        var listed = inventory["Objects"]!.First(item => (string?)item["Name"] == "vwOrders");
+        Assert.Equal(view.Value<string>("Fingerprint"), (string?)listed["Fingerprint"]);
+
         // An item of a package is applied to the database of the environment, whatever it is called here.
         var applied = await rig.CommandAsync("DatabaseApply", request =>
         {

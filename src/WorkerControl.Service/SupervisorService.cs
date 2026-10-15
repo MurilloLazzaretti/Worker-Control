@@ -561,6 +561,37 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             case "TransportTarget":
                 return _transport!.Target(request.Value<string>("Kind"), request.Value<string>("Name"));
 
+            case "TransportInventory":
+                return _transport!.Inventory();
+
+            case "DatabaseInventory" when _database?.Objects is null:
+                return Admin.Error("not-configured", "The objects of the database are not being watched on this machine");
+
+            case "DatabaseInventory":
+            {
+                try
+                {
+                    var (database, objects) = _database!.InventoryAsync(request.Value<string>("Database") is { Length: > 0 } named ? named : null).GetAwaiter().GetResult();
+                    return Admin.Ok(answer =>
+                    {
+                        answer["Database"] = database;
+                        answer["Objects"] = new JArray(objects.Select(item => new JObject
+                        {
+                            ["Kind"] = item.Object.Kind, ["Schema"] = item.Object.Schema, ["Name"] = item.Object.Name,
+                            ["ModifiedAt"] = item.Object.ModifiedAt is { } at ? new DateTimeOffset(DateTime.SpecifyKind(at, DateTimeKind.Utc)) : null, ["Fingerprint"] = item.Fingerprint
+                        }));
+                    });
+                }
+                catch (DatabaseMonitor.Refused refused)
+                {
+                    return Admin.Error(refused.Code, refused.Message);
+                }
+                catch (Exception error) when (error is System.Data.Common.DbException or InvalidOperationException or TimeoutException)
+                {
+                    return Admin.Error("database-failed", error.Message);
+                }
+            }
+
             case "TransportCapture":
                 return _transport!.Capture(request.Value<string>("Kind"), request.Value<string>("Name"), request.Value<bool?>("Incoming") == true);
 

@@ -267,6 +267,10 @@ A web application made of modules published as folders (micro frontends) can be 
 
 What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
 
+#### Comparing environments
+
+`TransportInventory` gives every target in a few words: version, files, bytes, a fingerprint of its files (paths and contents, without what belongs to the environment) and when the newest of them was written. `DatabaseInventory` (`Database`) gives every object of a watched database with when it was last modified and its fingerprint, while it has not changed since it was last read; nothing of what is in the tables. `TransportTarget` gives, with each file, when it was last written. The panel compares two environments with them.
+
 #### One name, several applications
 
 The name of the DNS stays put; what answers by it is swapped in the reverse proxy. For each `Address` the agent keeps a file of its own, `conf/zapmq/web-<address>.conf` beside `nginx.conf`, that the `server` of that name includes once, in place of its own `root` and `location /`:

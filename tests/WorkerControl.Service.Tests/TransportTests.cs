@@ -658,6 +658,14 @@ public class TransportAdminTests
 
         Assert.True(deployed!.Value<bool>("Applied"), deployed.ToString());
         Assert.Equal((0, 1, 0), (deployed.Value<int>("Added"), deployed.Value<int>("Changed"), deployed.Value<int>("Removed")));
+
+        // In a few words, to compare with another environment: the same files make the same fingerprint, whatever the configuration.
+        var inventory = (await rig.CommandAsync("TransportInventory"))!["Targets"]!.ToDictionary(target => (string)target["Name"]!);
+        Assert.Equal((string?)inventory["Orders"]["Fingerprint"], (string?)inventory["Sockets"]["Fingerprint"]);
+        Assert.Equal((1, 2L), ((int)inventory["Orders"]["Files"]!, (long)inventory["Orders"]["Bytes"]!));
+        Assert.NotNull((DateTimeOffset?)inventory["Orders"]["Newest"]);
+        var dated = await rig.CommandAsync("TransportTarget", request => { request["Kind"] = "service"; request["Name"] = "Orders"; });
+        Assert.NotNull((DateTimeOffset?)dated!["Files"]![0]!["Modified"]);
         Assert.Equal(("v2", "{of sockets}"), (File.ReadAllText(Path.Combine(sockets, "App.exe")), File.ReadAllText(Path.Combine(sockets, "appsettings.json"))));
         Assert.Equal(["stop Sockets", "start Sockets"], machine.Did);
         Assert.StartsWith(Path.Combine(rig.Directory, "transport", "backup", "service", "Sockets"), deployed.Value<string>("Backup"));

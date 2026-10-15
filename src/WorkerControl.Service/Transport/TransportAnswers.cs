@@ -110,9 +110,45 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         return Admin.Ok(answer =>
         {
             answer["Target"] = Describe(target);
-            answer["Files"] = folder is null ? new JArray() : Files(target.File is null ? FileSet.List(folder, target.Keep) : One(folder, target.File));
+            answer["Files"] = folder is null ? new JArray() : Dated(folder, target.File is null ? FileSet.List(folder, target.Keep) : One(folder, target.File));
         });
     }
+
+    /// <summary>
+    /// The files with when each was last written, to tell which side has the newer one.
+    /// </summary>
+    private static JArray Dated(string folder, IEnumerable<FileEntry> files) =>
+        new(files.Select(file => new JObject
+        {
+            ["Path"] = file.Path, ["Size"] = file.Size, ["Sha256"] = file.Sha256,
+            ["Modified"] = new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(folder, file.Path.Replace('/', Path.DirectorySeparatorChar))), TimeSpan.Zero)
+        }));
+
+    /// <summary>
+    /// Every target of the machine in a few words, to compare with another environment: its
+    /// version, how many files and how much, what tells the set of its files from another, and
+    /// when the newest of them was written. What belongs to the environment is left out.
+    /// </summary>
+    public JObject Inventory() => Admin.Ok(answer =>
+    {
+        answer["Targets"] = new JArray(catalog.All().Select(target =>
+        {
+            var described = new JObject { ["Kind"] = target.Kind, ["Name"] = target.Name, ["Version"] = target.Version, ["Mode"] = target.Mode };
+            var folder = target.Paths.FirstOrDefault(Directory.Exists);
+            if (folder is null)
+            {
+                described["Problem"] = target.Problem ?? "The folder of this target does not exist on this machine";
+                return described;
+            }
+            var files = target.File is null ? FileSet.List(folder, target.Keep) : One(folder, target.File);
+            described["Files"] = files.Count;
+            described["Bytes"] = files.Sum(file => file.Size);
+            described["Fingerprint"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+                string.Concat(files.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).Select(file => $"{file.Path.ToLowerInvariant()}:{file.Sha256}\n")))));
+            described["Newest"] = files.Count == 0 ? null : new DateTimeOffset(files.Max(file => File.GetLastWriteTimeUtc(Path.Combine(folder, file.Path.Replace('/', Path.DirectorySeparatorChar)))), TimeSpan.Zero);
+            return described;
+        }));
+    });
 
     /// <summary>
     /// Packs what the target is running now, to go into a package. The file is left where the

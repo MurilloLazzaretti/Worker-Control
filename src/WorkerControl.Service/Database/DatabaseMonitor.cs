@@ -467,6 +467,24 @@ internal sealed class DatabaseMonitor(IDatabaseSource source, ISecretProtector p
         return (name, objects, now);
     }
 
+    /// <summary>
+    /// Every object of a database with what tells one version of it from another, to compare with
+    /// another environment: the fingerprint read when the object was last looked at, while it has
+    /// not changed since. Nothing of what is in the tables.
+    /// </summary>
+    public async Task<(string Database, List<(CatalogObject Object, string? Fingerprint)> Objects)> InventoryAsync(string? database)
+    {
+        var (name, catalog, _) = await ObjectsAsync(database, fresh: true);
+        var known = (objects?.Known(name) ?? []).ToDictionary(item => (item.Kind, item.Schema.ToLowerInvariant(), item.Name.ToLowerInvariant()));
+        return (name, [.. catalog.Select(item =>
+        {
+            var seen = known.GetValueOrDefault((item.Kind, item.Schema.ToLowerInvariant(), item.Name.ToLowerInvariant()));
+            // Changed after it was last read: its fingerprint is of an older version.
+            var fingerprint = seen is { ModifiedAt: { } then } && item.ModifiedAt is { } now && Math.Abs((now - then).TotalSeconds) < 1 ? seen.Fingerprint : null;
+            return (item, fingerprint);
+        })]);
+    }
+
     public async Task<(string Database, CatalogDetail Detail)> ObjectAsync(string? database, string kind, string schema, string name)
     {
         async Task<CatalogObject?> Find(bool fresh) =>
