@@ -575,7 +575,7 @@ public sealed class TargetCatalogTests : IDisposable
 
         var targets = catalog.All().ToDictionary(target => target.Kind + ":" + target.Name);
 
-        Assert.Equal(["api:Orders", "api:Stock", "frontend:orders", "frontend:shell", "service:Missing", "service:Sockets", "service:Wrapped", "worker:Orders", "worker:OrdersNight"], targets.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["api:Orders", "api:Stock", "frontend:App", "frontend:orders", "frontend:shell", "service:Missing", "service:Sockets", "service:Wrapped", "worker:Orders", "worker:OrdersNight"], targets.Keys.Order(StringComparer.Ordinal));
         // The two groups run the same program: they go together.
         Assert.Equal(["Orders", "OrdersNight"], targets["worker:Orders"].Groups);
         // The instances of an application are one target with every folder; the site of the web application is not an api.
@@ -590,6 +590,8 @@ public sealed class TargetCatalogTests : IDisposable
         Assert.Contains("mfe/orders/", targets["frontend:shell"].Keep);
         Assert.Contains("assets/mf.manifest.json", targets["frontend:shell"].Keep);
         Assert.Null(targets["frontend:shell"].Problem);
+        // And the whole of it, to take it where a monolith is.
+        Assert.Equal(("mfe", Path.Combine(_root, "www", "app")), (targets["frontend:App"].Mode, targets["frontend:App"].Paths.Single()));
 
         // A monolith is one target, the whole folder.
         var whole = new TargetCatalog(() => config, machine, machine, () => [web with { Modules = [] } with { Mode = "monolith" }]).All().Where(target => target.Kind == "frontend").ToList();

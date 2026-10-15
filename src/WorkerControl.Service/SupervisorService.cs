@@ -213,6 +213,32 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     }
 
     /// <summary>
+    /// A web application whose files became of another kind (a monolith replaced by micro
+    /// frontends, or back) is registered as what it is now, so its modules are known from then on.
+    /// </summary>
+    private void ChangeFrontendMode(string? kind, string? name, string? mode, JObject answer)
+    {
+        if (kind != "frontend" || mode is not ("mfe" or "monolith") || _config?.Frontends.FirstOrDefault(app => string.Equals(app.Name, name, StringComparison.OrdinalIgnoreCase)) is not { } app
+            || app.Mode == mode)
+            return;
+        try
+        {
+            _file.ChangeEnvironmentList("Frontends", list =>
+            {
+                foreach (var entry in list.OfType<JObject>().Where(item => string.Equals((string?)item["Name"], app.Name, StringComparison.OrdinalIgnoreCase)))
+                    entry["Mode"] = mode;
+            });
+            Interlocked.Exchange(ref _reloadRequested, 1);
+            answer["Mode"] = mode;
+            Record(EventKind.ConfigApplied, $"web application {app.Name} is now {(mode == "mfe" ? "of micro frontends" : "a monolith")}");
+        }
+        catch (ConfigException error)
+        {
+            answer["ModeProblem"] = $"The files were put in place, but {app.Name} is still registered as {app.Mode}: {error.Message}";
+        }
+    }
+
+    /// <summary>
     /// The service is of no use without a configuration, but a missing or broken file is no
     /// reason to stop either: it waits for a good one.
     /// </summary>
@@ -603,6 +629,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 var kind = request.Value<string>("Kind");
                 var name = request.Value<string>("Name");
                 var answer = _transport!.Revert(kind, name, request.Value<string>("Backup"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping);
+                if (answer.Value<bool>("Applied"))
+                    ChangeFrontendMode(kind, name, request.Value<string>("Mode"), answer);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "put back as it was" : "not put back, " + answer.Value<string>("Problem"))}" + by);
@@ -678,6 +706,8 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 var name = request.Value<string>("Name");
                 var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping,
                     request.Value<string>("Version") is { Length: > 0 } version ? version.Trim() : null);
+                if (answer.Value<bool>("Applied"))
+                    ChangeFrontendMode(kind, name, request.Value<string>("Mode"), answer);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "replaced" : "not replaced, " + answer.Value<string>("Problem"))}" + by);

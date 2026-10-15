@@ -36,6 +36,11 @@ public sealed record DeployTarget(string Kind, string Name, IReadOnlyList<string
     /// </summary>
     public string? File { get; init; }
     public string? VersionsFile { get; init; }
+
+    /// <summary>
+    /// For a whole web application: mfe or monolith.
+    /// </summary>
+    public string? Mode { get; init; }
 }
 
 /// <summary>
@@ -153,10 +158,22 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
             {
                 targets.Add(new DeployTarget("frontend", app.Name, [Folder(app.Root)], keep)
                 {
+                    Mode = "monolith",
                     Version = app.Modules.Select(VersionOf).FirstOrDefault(),
                     Problem = app.Problem
                 });
                 continue;
+            }
+
+            // The whole of it, shell, modules and their list: to take it where a monolith is.
+            if (!app.Modules.Any(module => string.Equals(module.Name, app.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                targets.Add(new DeployTarget("frontend", app.Name, [Folder(app.Root)], keep)
+                {
+                    Mode = "mfe",
+                    Version = app.Modules.Where(module => module.Name == "plataforma").Select(VersionOf).FirstOrDefault(),
+                    Problem = app.Problem
+                });
             }
 
             var moduleFolders = new List<string>();

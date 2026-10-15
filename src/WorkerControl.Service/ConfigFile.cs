@@ -204,6 +204,25 @@ internal sealed class ConfigFile(string directory)
     }
 
     /// <summary>
+    /// Changes a list among the sections of the environment (the web applications, the folders of
+    /// downloads), making it when it is not there, and leaves everything else as it is.
+    /// </summary>
+    public void ChangeEnvironmentList(string name, Action<JArray> change)
+    {
+        if (!EnvironmentSections.Contains(name))
+            throw new ArgumentException($"{name} is not a section of the environment", nameof(name));
+        lock (_gate)
+        {
+            Separate();
+            var environment = Parse(ReadEnvironment());
+            if (environment[name] is not JArray list)
+                environment[name] = list = [];
+            change(list);
+            WriteEnvironment(environment.ToString(Formatting.Indented));
+        }
+    }
+
+    /// <summary>
     /// Adds a group to the end of the list. False when there is one of that name already.
     /// </summary>
     public bool AddGroup(JObject group)

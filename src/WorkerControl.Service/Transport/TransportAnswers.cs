@@ -21,6 +21,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
         ["Service"] = target.Service,
         ["Sites"] = new JArray(target.Sites),
         ["File"] = target.File,
+        ["Mode"] = target.Mode,
         ["Problem"] = target.Problem ?? (target.Paths.FirstOrDefault(path => !Directory.Exists(path)) is { } absent ? $"The folder {absent} does not exist" : null)
     };
 
