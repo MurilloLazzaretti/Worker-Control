@@ -97,6 +97,15 @@ internal sealed class FrontendWatcher(string directory, Func<string, string?, (i
     }
 
     /// <summary>
+    /// Looks again at the next tick: files of an application were just replaced.
+    /// </summary>
+    public void LookSoon()
+    {
+        lock (_gate)
+            _next = DateTimeOffset.MinValue;
+    }
+
+    /// <summary>
     /// Looks again when it is time to, without holding whoever calls.
     /// </summary>
     public void Tick()

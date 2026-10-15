@@ -259,9 +259,27 @@ A web application made of modules published as folders (micro frontends) can be 
 | `Host` | none | The name of the site, when `BaseUrl` is only the address of the machine |
 | `Manifest` | `assets/mf.manifest.json` | The file with the modules: an object of name and path of the entry file |
 | `VersionFile` | `version.json` | The file beside the entry file of each module, with `nome`, `build` and `versions` (`version`, `date`, `descriptions`), the newest first |
-| `Mode` | `mfe` | `mfe`: a shell that loads the modules listed in `Manifest`; the shell and each module are replaced apart, the shell leaving alone the folders of the modules and the manifest. `monolith`: one application, replaced whole; its version is in `VersionFile` at the root |
+| `Mode` | `mfe` | `mfe`: a shell that loads the modules listed in `Manifest`; the shell and each module are replaced apart, the shell leaving alone the folders of the modules and the manifest. `monolith`: one application, replaced whole; its version is in `VersionFile` at the root. It never changes: the other kind is another application, under another name |
+| `Address` | none | The name of the DNS it answers by. Several applications may share one; only the active one answers |
+| `Active` | `true` | Whether it is the one that answers by `Address`. Two active applications with the same `Address` are refused |
+| `Serve` | `files` | `files`: the proxy serves `Root` itself. `proxy`: it passes the requests to `ProxyTo` (a site of the web server) |
+| `ProxyTo` | none | With `Serve` `proxy`, the address of that site, such as `http://127.0.0.1:8080` |
 
 What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
+
+#### One name, several applications
+
+The name of the DNS stays put; what answers by it is swapped in the reverse proxy. For each `Address` the agent keeps a file of its own, `conf/zapmq/web-<address>.conf` beside `nginx.conf`, that the `server` of that name includes once, in place of its own `root` and `location /`:
+
+```nginx
+server {
+    listen 80;
+    server_name app.example;
+    include zapmq/web-app.example.conf;
+}
+```
+
+`WebActivate` (`Name`) writes in that file what serves the application (its folder, with the page and the manifests never cached, or the site it is passed to), has the proxy test the whole configuration, puts the file back as it was when the test fails, and otherwise makes the proxy read it again and marks the others of the same `Address` inactive. `WebDeactivate` leaves an "out of the air" page (503) in its place. `WebSite` (`Address`) says where the file is, whether the configuration includes it yet and the line that does. An application of micro frontends registered with an empty folder gets its first files as a whole application from the transport; it answers only once activated.
 
 ### Downloads
 

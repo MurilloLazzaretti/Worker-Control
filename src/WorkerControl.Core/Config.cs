@@ -343,9 +343,28 @@ public sealed record FrontendConfig
 
     /// <summary>
     /// mfe: a shell that loads modules published apart, listed in <see cref="Manifest"/>.
-    /// monolith: one application, published whole.
+    /// monolith: one application, published whole. It never changes: one of each is another application.
     /// </summary>
     public string Mode { get; init; } = "mfe";
+
+    /// <summary>
+    /// The name it is reached by (the one of the DNS), as the reverse proxy serves it. Several
+    /// applications may have the same: only the active one answers by it.
+    /// </summary>
+    public string? Address { get; init; }
+
+    /// <summary>
+    /// Whether it is the one that answers by <see cref="Address"/> now.
+    /// </summary>
+    public bool Active { get; init; } = true;
+
+    /// <summary>
+    /// files: the proxy serves the files of the folder itself. proxy: it passes the requests to
+    /// <see cref="ProxyTo"/>, a site of the web server that serves the folder.
+    /// </summary>
+    public string Serve { get; init; } = "files";
+
+    public string? ProxyTo { get; init; }
 }
 
 /// <summary>
@@ -936,9 +955,27 @@ public static class ConfigReader
             if (address is not null && !(Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"))
                 throw new ConfigException($"\"BaseUrl\" must be an http or https address in {where}");
 
+            var serve = Text(item, "Serve", where)?.Trim().ToLowerInvariant() switch
+            {
+                null or "" or "files" => "files",
+                "proxy" => "proxy",
+                _ => throw new ConfigException($"\"Serve\" must be files or proxy in {where}")
+            };
+            var proxyTo = Text(item, "ProxyTo", where) is { Length: > 0 } to ? to.Trim() : null;
+            if (serve == "proxy" && !(Uri.TryCreate(proxyTo, UriKind.Absolute, out var site) && site.Scheme is "http" or "https"))
+                throw new ConfigException($"\"ProxyTo\" must be the http address of the site that serves it in {where}");
+            var addressName = Text(item, "Address", where) is { Length: > 0 } dns ? dns.Trim().ToLowerInvariant() : null;
+            if (addressName is not null && (addressName.Length > 253 || addressName.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '-'))))
+                throw new ConfigException($"\"Address\" must be a name of the DNS, as app.example.com, in {where}");
+            var active = Boolean(item, "Active", where, defaultValue: true);
+
             frontends.Add(new FrontendConfig
             {
                 Name = name,
+                Address = addressName,
+                Active = active,
+                Serve = serve,
+                ProxyTo = proxyTo,
                 Root = folder,
                 BaseUrl = address,
                 Host = Text(item, "Host", where) is { Length: > 0 } host ? host.Trim() : null,
@@ -952,6 +989,9 @@ public static class ConfigReader
                 }
             });
         }
+        // A name of the DNS is answered by one application at a time.
+        foreach (var shared in frontends.Where(app => app.Active && app.Address is not null).GroupBy(app => app.Address).Where(group => group.Count() > 1))
+            throw new ConfigException($"{string.Join(" and ", shared.Select(app => app.Name))} are both active at {shared.Key}: only one answers by a name");
         return frontends;
     }
 

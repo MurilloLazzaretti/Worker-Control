@@ -452,6 +452,9 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
             return Admin.Error("not-found", $"There is no {kind} called {name} on this machine");
         if (string.IsNullOrEmpty(file) || !File.Exists(file))
             return Admin.Error("invalid-request", "The files of the item are not where they were said to be");
+        // A web application registered and still empty: its folder is made to receive its first version.
+        if (target.Kind == "frontend" && target.Mode == "mfe" && target.Paths is [var root] && !Directory.Exists(root))
+            Directory.CreateDirectory(root);
 
         var result = deployer.DeployAsync(target, file, package, item, config()?.Transport.KeepVersions ?? 3, stopping, force, version).GetAwaiter().GetResult();
         return Admin.Ok(answer =>

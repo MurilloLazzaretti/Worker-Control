@@ -171,8 +171,8 @@ internal sealed class TargetCatalog(Func<WorkerControlConfig?> config, IServiceM
                 targets.Add(new DeployTarget("frontend", app.Name, [Folder(app.Root)], keep)
                 {
                     Mode = "mfe",
-                    Version = app.Modules.Where(module => module.Name == "plataforma").Select(VersionOf).FirstOrDefault(),
-                    Problem = app.Problem
+                    Version = app.Modules.Where(module => module.Name == "plataforma").Select(VersionOf).FirstOrDefault()
+                    // No problem of its modules stops the whole of it: it is how an empty one gets its first version.
                 });
             }
 

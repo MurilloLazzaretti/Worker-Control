@@ -224,6 +224,55 @@ internal sealed partial class ProxyWork(Func<WorkerControlConfig?> config, IServ
     }
 
     /// <summary>
+    /// The file, under the folder of the configuration, that says which web application answers
+    /// by a name of the DNS. The server of the site includes it once; from then on it is rewritten.
+    /// </summary>
+    public static string SiteFile(string address) => $"zapmq/web-{address}.conf";
+
+    /// <summary>
+    /// Where the file of a name is, whether the configuration includes it, and what it says now.
+    /// </summary>
+    public (string? Path, bool Included, string? Content, string? Problem) Site(string address)
+    {
+        if (Where() is not { } place)
+            return (null, false, null, "It is not known where the proxy is on this machine");
+        var file = Path.Combine(Path.GetDirectoryName(place.Config)!, SiteFile(address).Replace('/', Path.DirectorySeparatorChar));
+        var included = File.Exists(file) && Files(place).Contains(file, StringComparer.OrdinalIgnoreCase);
+        return (file, included, File.Exists(file) ? File.ReadAllText(file) : null, null);
+    }
+
+    /// <summary>
+    /// Writes the file of a name and, when the proxy takes the whole configuration with it, makes
+    /// it read it again. When it does not, the file goes back to what it was and nothing changes.
+    /// </summary>
+    public (bool Saved, bool Reloaded, bool Included, string Output, string? Path) WriteSite(string address, string content)
+    {
+        if (Where() is not { } place)
+            return (false, false, false, "It is not known where the proxy is on this machine", null);
+        if (place.Executable is null)
+            return (false, false, false, "The executable of the proxy was not found beside its configuration", null);
+        var file = Path.Combine(Path.GetDirectoryName(place.Config)!, SiteFile(address).Replace('/', Path.DirectorySeparatorChar));
+        var before = File.Exists(file) ? File.ReadAllBytes(file) : null;
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, content);
+        var (ok, output) = Check(place, tool);
+        if (!ok)
+        {
+            if (before is null)
+                File.Delete(file);
+            else
+                File.WriteAllBytes(file, before);
+            return (false, false, false, output, file);
+        }
+        var included = Files(place).Contains(file, StringComparer.OrdinalIgnoreCase);
+        // Not included yet: nothing would change by reading it again; the panel says what to add.
+        if (!included)
+            return (true, false, false, output, file);
+        var (code, said) = tool.Run(place.Executable, $"-s reload -p \"{place.Root}\" -c \"{place.Config}\"", place.Root);
+        return (true, code == 0, true, code == 0 ? output : said, file);
+    }
+
+    /// <summary>
     /// Makes the proxy read its configuration again without stopping. It is tested first: a
     /// proxy asked to read a bad configuration keeps the one it has, and says nothing.
     /// </summary>

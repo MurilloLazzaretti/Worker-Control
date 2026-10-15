@@ -46,6 +46,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
     private DatabaseMonitor? _database;
     private TransportWork? _transport;
     private ProxyWork? _proxy;
+    private WebSwitch? _web;
     private AdminGuard? _guard;
     private TargetCatalog? _targets;
     private ApplicationWork? _applications;
@@ -111,6 +112,7 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
         _applications = new ApplicationWork(targets, deployer, groupSwitch, services, webServer, network, () => _config, _file, () => Interlocked.Exchange(ref _reloadRequested, 1),
             transportDirectory, time, loggers.CreateLogger("WorkerControl.Applications"));
         _proxy = new ProxyWork(() => _config, services, proxyTool, transportDirectory, time);
+        _web = new WebSwitch(() => _config, _proxy, _file, () => Interlocked.Exchange(ref _reloadRequested, 1), time);
         try
         {
             _transport.PrepareInbox();
@@ -210,32 +212,6 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
 
         state.Save(supervisor.GetRecords());
         _logger.LogInformation("Stopped");
-    }
-
-    /// <summary>
-    /// A web application whose files became of another kind (a monolith replaced by micro
-    /// frontends, or back) is registered as what it is now, so its modules are known from then on.
-    /// </summary>
-    private void ChangeFrontendMode(string? kind, string? name, string? mode, JObject answer)
-    {
-        if (kind != "frontend" || mode is not ("mfe" or "monolith") || _config?.Frontends.FirstOrDefault(app => string.Equals(app.Name, name, StringComparison.OrdinalIgnoreCase)) is not { } app
-            || app.Mode == mode)
-            return;
-        try
-        {
-            _file.ChangeEnvironmentList("Frontends", list =>
-            {
-                foreach (var entry in list.OfType<JObject>().Where(item => string.Equals((string?)item["Name"], app.Name, StringComparison.OrdinalIgnoreCase)))
-                    entry["Mode"] = mode;
-            });
-            Interlocked.Exchange(ref _reloadRequested, 1);
-            answer["Mode"] = mode;
-            Record(EventKind.ConfigApplied, $"web application {app.Name} is now {(mode == "mfe" ? "of micro frontends" : "a monolith")}");
-        }
-        catch (ConfigException error)
-        {
-            answer["ModeProblem"] = $"The files were put in place, but {app.Name} is still registered as {app.Mode}: {error.Message}";
-        }
     }
 
     /// <summary>
@@ -629,11 +605,11 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 var kind = request.Value<string>("Kind");
                 var name = request.Value<string>("Name");
                 var answer = _transport!.Revert(kind, name, request.Value<string>("Backup"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping);
-                if (answer.Value<bool>("Applied"))
-                    ChangeFrontendMode(kind, name, request.Value<string>("Mode"), answer);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "put back as it was" : "not put back, " + answer.Value<string>("Problem"))}" + by);
+                if (kind == "frontend")
+                    _frontends?.LookSoon();
                 return answer;
             }
 
@@ -706,11 +682,11 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
                 var name = request.Value<string>("Name");
                 var answer = _transport!.Deploy(kind, name, request.Value<string>("File"), package, item, request.Value<bool?>("Force") == true, lifetime.ApplicationStopping,
                     request.Value<string>("Version") is { Length: > 0 } version ? version.Trim() : null);
-                if (answer.Value<bool>("Applied"))
-                    ChangeFrontendMode(kind, name, request.Value<string>("Mode"), answer);
                 if (answer.Value<bool>("Ok"))
                     Record(answer.Value<bool>("Applied") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
                         $"item {item} of package {package}: {kind} {name} {(answer.Value<bool>("Applied") ? "replaced" : "not replaced, " + answer.Value<string>("Problem"))}" + by);
+                if (kind == "frontend")
+                    _frontends?.LookSoon();
                 return answer;
             }
 
@@ -783,7 +759,38 @@ internal sealed class SupervisorService(IOptions<ServiceOptions> options, ILogge
             case "Frontends":
             {
                 var (apps, publications) = _frontends!.Snapshot();
-                return Admin.Frontends(apps, publications);
+                var answer = Admin.Frontends(apps, publications);
+                foreach (var app in answer["Frontends"]!.OfType<JObject>())
+                    if (_config?.Frontends.FirstOrDefault(known => known.Name == (string?)app["Name"]) is { } known)
+                    {
+                        app["Address"] = known.Address;
+                        app["Active"] = known.Active;
+                        app["Serve"] = known.Serve;
+                        app["ProxyTo"] = known.ProxyTo;
+                    }
+                return answer;
+            }
+
+            case "WebSite":
+                return _web!.Site(request.Value<string>("Address"));
+
+            case "WebActivate":
+            case "WebDeactivate":
+            {
+                var name = request.Value<string>("Name");
+                var activate = command == "WebActivate";
+                var requester = request.Value<string>("By") is { Length: > 0 } named ? named : "panel";
+                var answer = activate ? _web!.Activate(name, requester) : _web!.Deactivate(name, requester);
+                if (answer.Value<bool>("Ok"))
+                    Record(answer.Value<bool>("Switched") ? EventKind.ManualAction : EventKind.MonitoredActionFailed,
+                        answer.Value<bool>("Switched")
+                            ? (activate ? $"web application {name} answers at {answer.Value<string>("Address")}" : $"web application {name} deactivated: nothing answers at {answer.Value<string>("Address")}")
+                              + (answer["Deactivated"] is JArray { Count: > 0 } others ? $"; {string.Join(", ", others)} no longer" : "")
+                              + (answer.Value<bool>("Included") ? "" : "; the proxy does not include the file yet")
+                              + by
+                            : $"web application {name} not {(activate ? "activated" : "deactivated")}, the proxy refused it" + by,
+                        FrontendWatcher.GroupPrefix + name);
+                return answer;
             }
 
             case "ListServices":

@@ -119,8 +119,23 @@ internal sealed class ConfigFile(string directory)
         lock (_gate)
         {
             ConfigReader.Parse(Merge(Read(), json));
+            KeepKinds(Parse(ReadEnvironment()), given);
             Replace(EnvironmentPath, given.ToString(Formatting.Indented), keepPrevious: true);
         }
+    }
+
+    /// <summary>
+    /// A web application is a monolith or one of micro frontends for good: another kind is another
+    /// application, registered with a name of its own.
+    /// </summary>
+    private static void KeepKinds(JObject before, JObject after)
+    {
+        static string Kind(JObject app) => ((string?)app["Mode"])?.Trim().ToLowerInvariant() is "monolith" ? "monolith" : "mfe";
+        var was = (before["Frontends"] as JArray ?? []).OfType<JObject>().Where(app => app["Name"] is not null)
+            .GroupBy(app => ((string)app["Name"]!).Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(group => group.Key, group => Kind(group.First()), StringComparer.OrdinalIgnoreCase);
+        foreach (var app in (after["Frontends"] as JArray ?? []).OfType<JObject>())
+            if (((string?)app["Name"])?.Trim() is { } name && was.TryGetValue(name, out var kind) && kind != Kind(app))
+                throw new ConfigException($"The web application {name} is {(kind == "mfe" ? "of micro frontends" : "a monolith")} and stays one: register the other kind under another name");
     }
 
     /// <summary>
