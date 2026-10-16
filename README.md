@@ -269,7 +269,7 @@ What changes on disk is kept as a publication in `frontends.json`, next to `Conf
 
 #### Services run by nssm
 
-`ApplicationDefaults` says, for each service run by nssm, the program it runs (`Program`) and the script given to it (`Script`), and where the nssm of the machine is (`Wrapper`: the one some service already runs through). `ApplicationCreate` with `Program` registers a service through that nssm: the program, given the executable of the application (the script) as its argument, in the folder of the application. Without any service run by nssm on the machine it is refused.
+`ApplicationDefaults` says, for each service run by nssm, the program it runs (`Program`) and the script given to it (`Script`), and where the nssm of the machine is (`Wrapper`: the one some service already runs through). `ApplicationCreate` with `Program` registers a service through nssm (the one said in `Wrapper`, or else that one): the program, given the executable of the application (the script) as its argument, in the folder of the application. Without any service run by nssm on the machine it is refused.
 
 #### Comparing environments
 

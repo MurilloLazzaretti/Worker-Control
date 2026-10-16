@@ -137,6 +137,11 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
         public string? Program { get; init; }
 
         /// <summary>
+        /// The nssm to register it through; none takes the one some service of the machine already runs through.
+        /// </summary>
+        public string? Wrapper { get; init; }
+
+        /// <summary>
         /// For an application of the web server: every instance serves the same folder, instead of one folder each.
         /// </summary>
         public bool Shared { get; init; }
@@ -206,8 +211,10 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
                     throw new Refused($"There is already a service called {wanted.Name} on this machine");
                 if (wanted.Program is { Length: > 0 } program)
                 {
-                    if (Wrapper() is null)
-                        throw new Refused("No service of this machine runs through nssm, so it is not known where nssm is: register this one by hand");
+                    if (wanted.Wrapper is { Length: > 0 } said ? !Path.IsPathFullyQualified(said) || !File.Exists(said) : Wrapper() is null)
+                        throw new Refused(wanted.Wrapper is { Length: > 0 }
+                            ? $"nssm is not at {wanted.Wrapper} on this machine: install it, or say where it is"
+                            : "No service of this machine runs through nssm, so it is not known where nssm is: say where it is");
                     if (!Path.IsPathFullyQualified(program) || !File.Exists(program))
                         throw new Refused($"The program {program} is not on this machine");
                 }
@@ -337,7 +344,8 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
                     var display = string.IsNullOrWhiteSpace(wanted.DisplayName) ? wanted.Name : wanted.DisplayName.Trim();
                     if (wanted.Program is { Length: > 0 } program)
                         // Run through the wrapper of the machine: the program, given the file of the application, in its folder.
-                        services.CreateWrapped(wanted.Name, display, Wrapper()!, program, Full(wanted.Folder, wanted.Executable!), wanted.Folder, wanted.StartType is "Manual" ? "Manual" : "Automatic");
+                        services.CreateWrapped(wanted.Name, display, wanted.Wrapper is { Length: > 0 } wrapper ? wrapper : Wrapper()!, program, Full(wanted.Folder, wanted.Executable!), wanted.Folder,
+                            wanted.StartType is "Manual" ? "Manual" : "Automatic");
                     else
                         services.Create(wanted.Name, display, Full(wanted.Folder, wanted.Executable!), wanted.StartType is "Manual" ? "Manual" : "Automatic");
                     Did($"registered the service {wanted.Name}", () => services.Delete(wanted.Name), "the service " + wanted.Name);

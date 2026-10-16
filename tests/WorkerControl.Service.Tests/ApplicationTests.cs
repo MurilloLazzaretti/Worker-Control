@@ -229,6 +229,13 @@ public sealed class ApplicationTests : IDisposable
         var described = _work.Defaults()["Services"]!.First(service => (string?)service["Name"] == "Sockets");
         Assert.Equal((program, Path.Combine(wanted.Folder, "index.js")), ((string?)described["Program"], (string?)described["Script"]));
         Assert.Equal(nssm, (string?)_work.Defaults()["Wrapper"]);
+
+        // Said where nssm is: it has to be there.
+        Assert.Contains("nssm is not at", (string?)_work.Create(New("service", "Other") with { Zip = wanted.Zip, Executable = "index.js", Program = program, Wrapper = Path.Combine(_root, "none", "nssm.exe") }, CancellationToken.None)["Error"]!["Message"]);
+        _machine.Did.Clear();
+        var said = _work.Create(New("service", "Third") with { Zip = Zip(("index.js", "server")), Executable = "index.js", Program = program, Wrapper = nssm }, CancellationToken.None);
+        Assert.True((bool)said["Created"]!, (string?)said["Problem"]);
+        Assert.Equal("wrap Third Automatic", _machine.Did[0]);
     }
 
     [Fact]
