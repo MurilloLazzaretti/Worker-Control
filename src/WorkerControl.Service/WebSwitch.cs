@@ -38,9 +38,9 @@ internal sealed class WebSwitch(Func<WorkerControlConfig?> config, ProxyWork pro
                 $"location = /index.html {{\n    {never}\n}}\n" +
                 $"location ~ ^/assets/[^/]+\\.json$ {{\n    try_files $uri =404;\n    {never}\n}}\n";
         if (app.Mode == "mfe")
-            text += "\n# One folder per module; its entry and its versions have no hash in the name.\n" +
+            text += "\n# One folder per module. Its entry and what says where its parts are (remoteEntry, importmap, version) have no hash in the name.\n" +
                     $"location ^~ /mfe/ {{\n    try_files $uri =404;\n    {forever}\n" +
-                    $"    location ~ /(remoteEntry\\.js|version\\.json)$ {{\n        try_files $uri =404;\n        {never}\n    }}\n}}\n";
+                    $"    location ~ /(remoteEntry\\.js|[^/]+\\.json)$ {{\n        try_files $uri =404;\n        {never}\n    }}\n}}\n";
         // Named after what is in them: a new build brings new names.
         text += "\n# Files whose names change with each build: kept by the browser.\n" +
                 $"location ~* \\.(?:css|js|ico|gif|jpe?g|png|webp|woff2?|eot|ttf|svg)$ {{\n    try_files $uri =404;\n    {forever}\n}}\n";

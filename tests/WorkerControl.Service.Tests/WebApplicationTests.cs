@@ -96,6 +96,8 @@ public class WebApplicationTests
         var text = File.ReadAllText(site);
         Assert.Contains($"root \"{shell.Replace('\\', '/')}\";", text);
         Assert.Contains("/mfe/", text);
+        // The entry of each module and every .json beside it are asked again each time.
+        Assert.Contains(@"location ~ /(remoteEntry\.js|[^/]+\.json)$", text);
         Assert.Contains("try_files $uri $uri/ /index.html;", text);
         await App(rig, "Portal-MFE", app => (bool?)app["Active"] == true);
         Assert.False((bool)(await App(rig, "Portal", _ => true))["Active"]!);
