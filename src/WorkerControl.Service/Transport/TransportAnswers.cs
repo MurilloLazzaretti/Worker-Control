@@ -140,7 +140,7 @@ internal sealed class TransportWork(TargetCatalog catalog, Deployer deployer, Fu
                 described["Problem"] = target.Problem ?? "The folder of this target does not exist on this machine";
                 return described;
             }
-            var files = target.File is null ? FileSet.List(folder, target.Keep) : One(folder, target.File);
+            var files = target.File is null ? FileSet.List(folder, target.Keep, reuse: true) : One(folder, target.File);
             described["Files"] = files.Count;
             described["Bytes"] = files.Sum(file => file.Size);
             described["Fingerprint"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(

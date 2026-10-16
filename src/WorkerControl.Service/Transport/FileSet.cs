@@ -62,7 +62,11 @@ internal static class FileSet
     /// <summary>
     /// The files of a folder that are not kept, each with what tells one version of it from another.
     /// </summary>
-    public static List<FileEntry> List(string folder, IReadOnlyList<string> keep)
+    /// <param name="reuse">
+    /// Takes what a file was the last time it was read, while its size, its times and its path are
+    /// the same: only for comparing environments, never for what is packed or replaced.
+    /// </param>
+    public static List<FileEntry> List(string folder, IReadOnlyList<string> keep, bool reuse = false)
     {
         var entries = new List<FileEntry>();
         foreach (var (full, relative) in Files(folder))
@@ -71,8 +75,8 @@ internal static class FileSet
                 continue;
             var info = new FileInfo(full);
             // A file that did not change since it was last read is not read again.
-            var mark = (full, info.Length, info.LastWriteTimeUtc);
-            if (!Hashes.TryGetValue(mark, out var hash))
+            var mark = (full, info.Length, info.LastWriteTimeUtc, info.CreationTimeUtc);
+            if (!reuse || !Hashes.TryGetValue(mark, out var hash))
             {
                 using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 hash = Hash(stream);
@@ -85,7 +89,7 @@ internal static class FileSet
         return entries;
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Path, long Size, DateTime Written), string> Hashes = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Path, long Size, DateTime Written, DateTime Created), string> Hashes = new();
 
     /// <summary>
     /// Packs the files of a folder that are not kept, at the root of the zip.
