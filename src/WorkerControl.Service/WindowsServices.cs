@@ -71,6 +71,33 @@ internal sealed class WindowsServiceManager : IServiceManager
 
     public void Delete(string name) => Control("delete", name);
 
+    public void CreateWrapped(string name, string displayName, string wrapper, string program, string arguments, string folder, string startType)
+    {
+        Run(wrapper, "install", name, program, arguments);
+        Run(wrapper, "set", name, "AppDirectory", folder);
+        Run(wrapper, "set", name, "DisplayName", displayName);
+        Run(wrapper, "set", name, "Start", startType == "Manual" ? "SERVICE_DEMAND_START" : "SERVICE_AUTO_START");
+    }
+
+    private static void Run(string program, params string[] arguments)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(program)
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+            start.ArgumentList.Add(argument);
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException($"{program} could not be started");
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill();
+            throw new InvalidOperationException($"{Path.GetFileName(program)} {arguments[0]} did not finish");
+        }
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"{Path.GetFileName(program)} {string.Join(' ', arguments.Take(2))}: {output.Replace("\0", "").Trim()}");
+    }
+
     public string? WrappedArguments(string name)
     {
         try

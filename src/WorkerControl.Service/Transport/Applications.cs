@@ -67,6 +67,28 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
             .FirstOrDefault()?.Key ?? DefaultSiteName;
     }
 
+    private static bool IsWrapper(string? path) => path is not null && Path.GetFileNameWithoutExtension(path.Trim('"')).Equals("nssm", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The wrapper some service of this machine already runs through; null when none does.
+    /// </summary>
+    private string? Wrapper() =>
+        services.List().Select(service => service.ExecutablePath?.Trim('"')).FirstOrDefault(path => IsWrapper(path) && File.Exists(path));
+
+    /// <summary>
+    /// The script among the arguments given to the program: a full path, or one from the folder it runs in.
+    /// </summary>
+    private static string? ScriptIn(string? arguments, string? folder)
+    {
+        if (TargetCatalog.ScriptOf(arguments) is { } full)
+            return full;
+        if (string.IsNullOrWhiteSpace(arguments) || folder is null)
+            return null;
+        return System.Text.RegularExpressions.Regex.Matches(arguments, "\"([^\"]+)\"|(\\S+)")
+            .Select(match => Path.Combine(folder, match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value))
+            .FirstOrDefault(File.Exists);
+    }
+
     /// <summary>
     /// What whoever is about to create an application needs to follow what is already here.
     /// </summary>
@@ -85,7 +107,20 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
             answer["Sites"] = new JArray(network.Sites().OrderBy(site => site.Port).Select(site => new JObject { ["Name"] = site.Name, ["Port"] = site.Port, ["Path"] = site.PhysicalPath }));
             answer["Groups"] = new JArray((now?.Groups ?? []).Select(group => new JObject { ["Name"] = group.Name, ["Path"] = group.ApplicationFullPath, ["Workers"] = group.TotalWorkers }));
             answer["Services"] = new JArray(targets.Where(target => target.Kind == "service").Select(target => services.Find(target.Name)).OfType<InstalledService>()
-                .Select(service => new JObject { ["Name"] = service.Name, ["DisplayName"] = service.DisplayName, ["Path"] = service.ExecutablePath, ["StartType"] = service.StartType }));
+                .Select(service =>
+                {
+                    var described = new JObject { ["Name"] = service.Name, ["DisplayName"] = service.DisplayName, ["Path"] = service.ExecutablePath, ["StartType"] = service.StartType };
+                    // Run by a wrapper: the program it runs (node, java) and the script given to it.
+                    if (IsWrapper(service.ExecutablePath))
+                    {
+                        var (program, folder) = services.Wrapped(service.Name);
+                        described["Program"] = program;
+                        described["Script"] = ScriptIn(services.WrappedArguments(service.Name), folder);
+                    }
+                    return described;
+                }));
+            // The wrapper of this machine, to register a service that runs a program through it.
+            answer["Wrapper"] = Wrapper();
             answer["Listening"] = new JArray(network.Listeners().Keys.OrderBy(port => port));
         });
     }
@@ -95,6 +130,12 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
     public sealed record NewApplication(string Kind, string Name, string Folder, string Zip, string? Executable, int Instances, int Port, string? SiteName, string? DisplayName, string? StartType,
         IReadOnlyList<ConfigText> Configs)
     {
+        /// <summary>
+        /// For a service run through the wrapper of the machine: the program it runs, to which the
+        /// executable, a file of the application such as a script, is given.
+        /// </summary>
+        public string? Program { get; init; }
+
         /// <summary>
         /// For an application of the web server: every instance serves the same folder, instead of one folder each.
         /// </summary>
@@ -163,6 +204,13 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
             case "service":
                 if (services.Find(wanted.Name) is not null)
                     throw new Refused($"There is already a service called {wanted.Name} on this machine");
+                if (wanted.Program is { Length: > 0 } program)
+                {
+                    if (Wrapper() is null)
+                        throw new Refused("No service of this machine runs through nssm, so it is not known where nssm is: register this one by hand");
+                    if (!Path.IsPathFullyQualified(program) || !File.Exists(program))
+                        throw new Refused($"The program {program} is not on this machine");
+                }
                 if (wanted.StartType is not (null or "" or "Automatic" or "Manual"))
                     throw new Refused("\"StartType\" must be Automatic or Manual");
                 break;
@@ -287,7 +335,11 @@ internal sealed partial class ApplicationWork(TargetCatalog catalog, Deployer de
                     Place(wanted, wanted.Folder);
                     Did($"put the files in {wanted.Folder}");
                     var display = string.IsNullOrWhiteSpace(wanted.DisplayName) ? wanted.Name : wanted.DisplayName.Trim();
-                    services.Create(wanted.Name, display, Full(wanted.Folder, wanted.Executable!), wanted.StartType is "Manual" ? "Manual" : "Automatic");
+                    if (wanted.Program is { Length: > 0 } program)
+                        // Run through the wrapper of the machine: the program, given the file of the application, in its folder.
+                        services.CreateWrapped(wanted.Name, display, Wrapper()!, program, Full(wanted.Folder, wanted.Executable!), wanted.Folder, wanted.StartType is "Manual" ? "Manual" : "Automatic");
+                    else
+                        services.Create(wanted.Name, display, Full(wanted.Folder, wanted.Executable!), wanted.StartType is "Manual" ? "Manual" : "Automatic");
                     Did($"registered the service {wanted.Name}", () => services.Delete(wanted.Name), "the service " + wanted.Name);
                     file.ChangeSection("Services", section =>
                     {

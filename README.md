@@ -267,6 +267,10 @@ A web application made of modules published as folders (micro frontends) can be 
 
 What changes on disk is kept as a publication in `frontends.json`, next to `ConfigWorkers.json`.
 
+#### Services run by nssm
+
+`ApplicationDefaults` says, for each service run by nssm, the program it runs (`Program`) and the script given to it (`Script`), and where the nssm of the machine is (`Wrapper`: the one some service already runs through). `ApplicationCreate` with `Program` registers a service through that nssm: the program, given the executable of the application (the script) as its argument, in the folder of the application. Without any service run by nssm on the machine it is refused.
+
 #### Comparing environments
 
 `TransportInventory` gives every target in a few words: version, files, bytes, a fingerprint of its files (paths and contents, without what belongs to the environment) and when the newest of them was written. `DatabaseInventory` (`Database`) gives every object of a watched database with when it was last modified and its fingerprint, while it has not changed since it was last read; nothing of what is in the tables. `TransportTarget` gives, with each file, when it was last written. The panel compares two environments with them.

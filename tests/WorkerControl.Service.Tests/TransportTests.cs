@@ -226,6 +226,14 @@ internal sealed class PretendMachine : IGroupSwitch, IServiceManager, IWebServer
         Services.Remove(name);
     }
 
+    public void CreateWrapped(string name, string displayName, string wrapper, string program, string arguments, string folder, string startType)
+    {
+        Did.Add($"wrap {name} {startType}");
+        Services[name] = new InstalledService(name, displayName, wrapper, ServiceState.Stopped, startType, 0, 0);
+        WrappedPrograms[name] = (program, folder);
+        WrappedArgumentsOf[name] = arguments;
+    }
+
     /// <summary>
     /// What a wrapper says it runs, by service.
     /// </summary>

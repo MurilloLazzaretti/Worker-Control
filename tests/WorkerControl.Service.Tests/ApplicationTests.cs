@@ -200,6 +200,38 @@ public sealed class ApplicationTests : IDisposable
     }
 
     [Fact]
+    public void A_service_run_by_nssm_is_registered_through_the_nssm_of_the_machine()
+    {
+        var program = Path.Combine(_root, "nodejs", "node.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(program)!);
+        File.WriteAllText(program, "node");
+        var wanted = New("service", "Sockets") with { Zip = Zip(("index.js", "server"), ("package.json", "{}")), Executable = "index.js", Program = program };
+
+        // Without a service that runs through nssm, it is not known where it is.
+        Assert.Contains("nssm", (string?)_work.Create(wanted, CancellationToken.None)["Error"]!["Message"]);
+
+        var nssm = Path.Combine(_root, "nssm", "nssm.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(nssm)!);
+        File.WriteAllText(nssm, "nssm");
+        _machine.Services["nginx"] = new InstalledService("nginx", "nginx", nssm, ServiceState.Running, "Automatic", 1, 0);
+        Assert.Contains("is not on this machine", (string?)_work.Create(wanted with { Program = Path.Combine(_root, "none.exe") }, CancellationToken.None)["Error"]!["Message"]);
+
+        var created = _work.Create(wanted, CancellationToken.None);
+
+        Assert.True((bool)created["Created"]!, (string?)created["Problem"]);
+        Assert.Equal(["wrap Sockets Automatic", "start Sockets"], _machine.Did);
+        Assert.Equal(nssm, _machine.Services["Sockets"].ExecutablePath);
+        Assert.Equal((program, wanted.Folder), _machine.WrappedPrograms["Sockets"]);
+        Assert.Equal(Path.Combine(wanted.Folder, "index.js"), _machine.WrappedArgumentsOf["Sockets"]);
+        Assert.True(File.Exists(Path.Combine(wanted.Folder, "index.js")));
+
+        // Described for another environment: the program and the script, inside its folder.
+        var described = _work.Defaults()["Services"]!.First(service => (string?)service["Name"] == "Sockets");
+        Assert.Equal((program, Path.Combine(wanted.Folder, "index.js")), ((string?)described["Program"], (string?)described["Script"]));
+        Assert.Equal(nssm, (string?)_work.Defaults()["Wrapper"]);
+    }
+
+    [Fact]
     public void What_is_asked_wrong_or_turned_off_changes_nothing()
     {
         string? Refusal(ApplicationWork.NewApplication wanted) => (string?)_work.Create(wanted, CancellationToken.None)["Error"]?["Message"];
